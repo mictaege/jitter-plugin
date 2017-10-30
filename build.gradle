@@ -1,9 +1,15 @@
+plugins {
+    id "org.sonarqube" version "2.5"
+}
+
 group 'com.github.mictaege'
 version '1.0-SNAPSHOT'
 
 apply plugin: 'groovy'
 apply plugin: 'java'
+apply plugin: 'jacoco'
 apply plugin: 'maven'
+apply plugin: 'signing'
 
 sourceCompatibility = 1.8
 
@@ -18,4 +24,77 @@ dependencies {
     compile 'com.github.mictaege:spoon-gradle-plugin:1.0'
     compile 'com.github.mictaege:jitter-api:1.0'
     compile 'org.eclipse.jdt:org.eclipse.jdt.core:3.12.2'
+    testCompile "junit:junit:4.12"
+    testCompile "org.mockito:mockito-core:2.2.11"
 }
+
+sonarqube {
+    properties {
+        property "sonar.projectName", "com.github.mictaege.jitter-plugin"
+        property "sonar.projectKey", "com.github.mictaege.jitter-plugin"
+    }
+}
+
+task javadocJar(type: Jar) {
+    classifier = 'javadoc'
+    from javadoc
+}
+
+task sourcesJar(type: Jar) {
+    classifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+artifacts {
+    archives javadocJar, sourcesJar
+}
+
+signing {
+    required { gradle.taskGraph.hasTask("uploadArchives") } //sign only when upload archives
+    sign configurations.archives
+}
+
+//don't refer to username and pwd directly so it could be executed in another environment with another _gradle.properties_
+String publishUsername = hasProperty("ossrhUsername") ? property("ossrhUsername") : ""
+String publishPassword = hasProperty("ossrhPassword") ? property("ossrhPassword") : ""
+
+uploadArchives {
+    repositories {
+        mavenDeployer {
+            beforeDeployment { MavenDeployment deployment -> signing.signPom(deployment) }
+
+            repository(url: "https://oss.sonatype.org/service/local/staging/deploy/maven2/") {
+                authentication(userName: publishUsername, password: publishPassword)
+            }
+
+            snapshotRepository(url: "https://oss.sonatype.org/content/repositories/snapshots/") {
+                authentication(userName: publishUsername, password: publishPassword)
+            }
+
+            pom.project {
+                name 'jitter-plugin'
+                packaging 'jar'
+                description 'The jitter-plugin is a Gradle plugin to build and distribute different flavours of an application from a single source base.'
+                url 'https://github.com/mictaege/jitter-plugin'
+                scm {
+                    connection 'https://github.com/mictaege/jitter-plugin.git'
+                    url 'https://github.com/mictaege/jitter-plugin'
+                }
+                licenses {
+                    license {
+                        name 'Apache License, Version 2.0'
+                        url 'http://www.apache.org/licenses/LICENSE-2.0'
+                    }
+                }
+                developers {
+                    developer {
+                        id 'mictaege'
+                        name 'Michael Taege'
+                    }
+                }
+            }
+        }
+    }
+}
+
+

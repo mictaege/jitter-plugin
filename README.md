@@ -6,3 +6,5 @@
 [![Quality Gate](https://sonarcloud.io/api/badges/gate?key=com.github.mictaege.jitter-plugin%3Adevelop)](https://sonarcloud.io/dashboard/index/com.github.mictaege.jitter-plugin%3Adevelop)
 
 The _jitter-plugin_ is a Gradle plugin to build and distribute different flavours of an application from a single source base.
+
+**Work-In-Progress!**
