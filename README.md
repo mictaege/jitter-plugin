@@ -240,4 +240,46 @@ private void initDefault(Strings[] args) {
 
 Here the ```init()``` method - which is used by the other parts of the application - will be replaced by the template ```initA``` if the _CUSTOMER_A_ flavour is active, otherwise ```init()``` will be replaced with the template  ```initDefault()```. 
 
-The template methods - here ```initA``` and ```initDefault``` -  must have the same return type and parameter list (name and type) os the method to be replaced.
+The template methods - here ```initA``` and ```initDefault``` -  must have the same return type and parameter list (name and type) as the method to be replaced.
+
+### _@Alter_
+
+_@Alter_ defines an alternative implementation of an class, there _@Alter_ could only be applied to types.
+
+```Java
+@Alter(ifActive = Flavour.CUSTOMER_A, with = "PersonValidatorA", nested = true)
+@Alter(ifActive = Flavour.CUSTOMER_B, with = "PersonValidatorB", nested = true)
+@Alter(ifActive = Flavour.CUSTOMER_C, with = "PersonValidatorC")
+public class PersonValidator {
+    
+    public void validate(Person person) {
+        throw new IllegalStateException("Not implemented.");
+    }
+    
+    @OnlyIf(Flavour.CUSTOMER_A)
+    static class PersonValidatorA {
+        public void validate(Person person) {
+            //..
+        }
+    }
+    
+    @OnlyIf(Flavour.CUSTOMER_B)
+    static class PersonValidatorB {
+        public void validate(Person person) {
+            //..
+        }
+    }
+}
+
+@OnlyIf(Flavour.CUSTOMER_C)
+public class PersonValidatorC {
+    public void validate(Person person) {
+        //..
+    }
+}
+```
+
+Here the ```PersonValidator``` class - which is used by the other parts of the application - will be replaced by the template ```PersonValidatorA``` if the _CUSTOMER_A_ flavour is active, by ```PersonValidatorB``` if the _CUSTOMER_B_ flavour is active and by ```PersonValidatorC``` if the _CUSTOMER_C_ flavour is active.
+
+The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` -  must have the same API as the classed to be replaced. Template classes could either be nested or top level which is indicated by the ````nested``` flag. If the template classes are top level the have to be in the same package as the class to be replaced.
+
