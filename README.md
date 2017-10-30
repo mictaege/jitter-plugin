@@ -13,7 +13,7 @@ A common problem in software development is that one application has to be adopt
 
 Well known approaches to address this problem are _Forking_, _Feature-Toggles_ or - at least in the C-World - _Preprocessors_.
 
-_jitter_ uses Java Annotations Processing backed up by the Java analysis and transformation framework [Spoon](http://spoon.gforge.inria.fr/index.html). This way _jitter_ acts more like an _Preprocessor_ and transforms the source code before it's finally compiled, but is far integrated in the Java language and eco-system because of the use of plain Java Annotations.
+_jitter_ uses Java Annotations Processing backed up by the Java analysis and transformation framework [Spoon](http://spoon.gforge.inria.fr/index.html). This way _jitter_ acts more like an _Preprocessor_ and transforms the source code before it's finally compiled, but is far more integrated in the Java language and eco-system because of the use of plain Java Annotations.
 
 In order to get a first impression of _jitter_ let's have a look on a extremely simplified example.
 
@@ -29,7 +29,7 @@ public class Person {
 }
 ```
 
-and we have the need to extend that _Person_ in a particular variant of the application - e.g. for a specific customer - with an additional field _birthday_. we can do this with _jitter_ this way:
+and we have the need to extend that _Person_ in a particular variant of the application - e.g. for a specific customer - with an additional field _birthday_. With _jitter_ we can do this in this way:
 
 
 ```Java
@@ -81,7 +81,7 @@ The benefits of the _jitter_ approach is that
 
 _jitter_ consists of two parts. First the _jitter-api_ which contains Java annotations like ```@OnlyIf``` that are used to mark up parts of the source code, second the _jitter-plugin_ which does the annotation processing and source code transformation. Through this separation your project will only have a dependency to the very small and lightweight _jitter-api_.
 
-The _jitter-api_ is added as any other dependency in Gradle:
+The [jitter-api](https://github.com/mictaege/jitter-api) is added as any other dependency in Gradle:
 
 ```Groovy
 dependencies {
@@ -121,7 +121,7 @@ jitter {
 
 A complete example of a Gradle build using _jitter_ could be found in the [eval.jitter](https://github.com/mictaege/eval.jitter/blob/master/build.gradle) example.
 
-Once _jitter_ is applied and the flavours of the application are configured the project now has an additional Gradle task for each configured flavour. In the example above these would be the flavours ```flavourCUSTOMER_A```, ```flavourCUSTOMER_B``` and ```flavourCUSTOMER_C```. These additional ```flavourXyz```` tasks are used to select the flavour which should be build or run.
+Once _jitter_ is applied and the flavours of the application are configured the project now has an additional Gradle task for each configured flavour. In the example above these would be the tasks ```flavourCUSTOMER_A```, ```flavourCUSTOMER_B``` and ```flavourCUSTOMER_C```. These additional ```flavourXyz``` tasks are used to select the flavour which should be build or run.
 
 So for example if you like to build the _CUSTOMER_A_ flavour you have to type 
 
@@ -130,3 +130,114 @@ gradle flavourCUSTOMER_A clean build
 ```
 
 **Note** If the application was build or run with another flavour before, the next build or run should always include a clean.
+
+In order to verify the 150% model the ```flavourXyz``` could be omitted. E.g.:
+
+```Groovy
+gradle clean test
+```
+
+will execute all tests, even if a test is marked for a specific flavour.
+
+## _jitter_ Source Code Markup
+
+All _jitter_ annotations expect the applications flavour to be passed as a String that should match one of the configured flavours in the Gradle build script.
+
+Therefor it's a good practise to use String constants in the _jitter_ annotations instead of plain Strings. So you actually should not mark up your source code like this:
+
+```Java
+@OnlyIf("CUSTOMER_A")
+private LocalDate birthday;
+``` 
+
+A better way is to introduce a class which defines the known flavours of your application
+
+```Java
+public final class Flavour {
+
+    public static final String CUSTOMER_A = "CUSTOMER_A";
+    public static final String CUSTOMER_B = "CUSTOMER_B";
+    public static final String CUSTOMER_C = "CUSTOMER_C";
+
+    private Flavour() {
+        super();
+    }
+}
+``` 
+
+and to use this constants in the mark up annotations
+
+```Java
+@OnlyIf(Flavour.CUSTOMER_A)
+private LocalDate birthday;
+```
+
+### _@OnlyIf_
+
+_@OnlyIf_ marks that some code is only available if at least one of the given flavours is active. If none of the given flavours is active the marked source code will be removed. _@OnlyIf_ could be applied to types (classes, enums and interfaces), fields, constructors and methods.
+
+
+```Java
+@OnlyIf(Flavour.CUSTOMER_A)
+private LocalDate birthday;
+```
+
+```Java
+@OnlyIf({Flavour.CUSTOMER_A, Flavour.CUSTOMER_C})
+private String nickName;
+```
+
+
+```Java
+@OnlyIf(Flavour.CUSTOMER_A)
+public LocalDate getBirthday() {
+    return birthday;
+}
+```
+
+```Java
+public interface PersonDaoIF {
+    List<Person> findPersons();
+}
+
+@OnlyIf(Flavour.CUSTOMER_A)
+public class PersonDaoAImpl implements PersonDaoIF {
+    public List<Person> findPersons() {
+        //..
+    }
+}
+
+@OnlyIf(Flavour.CUSTOMER_B)
+public class PersonDaoBImpl implements PersonDaoIF {
+    public List<Person> findPersons() {
+        //..
+    }
+}
+```
+
+### _@Fork_
+
+A _@Fork_ defines a variance in the applications control flow, therefore _@Fork's_  could only be applied to methods. 
+
+```Java
+@Fork(ifActive = Flavour.CUSTOMER_A, to = "initA")
+@Fork(ifActive = Flavour.CUSTOMER_B, to = "initDefault")
+@Fork(ifActive = Flavour.CUSTOMER_C, to = "initDefault")
+public void init(Strings[] args) { 
+    initDefault(args);
+}
+
+@OnlyIf(Flavour.CUSTOMER_A)
+private void initA(Strings[] args) {
+    //...
+}
+
+@OnlyIf({Flavour.CUSTOMER_B, Flavour.CUSTOMER_C})
+private void initDefault(Strings[] args) {
+    //...
+}
+```
+
+Here the ```init()``` method - which is used by the other parts of the application - will be replaced by the template ```initA``` if the _CUSTOMER_A_ flavour is active, otherwise ```init()``` will be replaced with the template  ```initDefault()```. 
+
+The template methods - here ```initA``` and ```initDefault``` -  must have the same return type and parameter list (name and type) os the method to be replaced.
