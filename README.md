@@ -244,7 +244,7 @@ The template methods - here ```initA``` and ```initDefault``` -  must have the s
 
 ### _@Alter_
 
-_@Alter_ defines an alternative implementation of an class, there _@Alter_ could only be applied to types.
+_@Alter_ defines an alternative implementation of a class, therefore _@Alter_ could only be applied to types.
 
 ```Java
 @Alter(ifActive = Flavour.CUSTOMER_A, with = "PersonValidatorA", nested = true)
@@ -281,5 +281,5 @@ public class PersonValidatorC {
 
 Here the ```PersonValidator``` class - which is used by the other parts of the application - will be replaced by the template ```PersonValidatorA``` if the _CUSTOMER_A_ flavour is active, by ```PersonValidatorB``` if the _CUSTOMER_B_ flavour is active and by ```PersonValidatorC``` if the _CUSTOMER_C_ flavour is active.
 
-The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` -  must have the same API as the classed to be replaced. Template classes could either be nested or top level which is indicated by the ````nested``` flag. If the template classes are top level the have to be in the same package as the class to be replaced.
+The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` -  must have the same API as the classed to be replaced. Template classes could either be nested or top level which is indicated by the ```nested``` flag. If the template classes are top level the have to be in the same package as the class to be replaced.
 
