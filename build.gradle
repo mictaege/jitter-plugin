@@ -1,0 +1,21 @@
+group 'com.github.mictaege'
+version '1.0-SNAPSHOT'
+
+apply plugin: 'groovy'
+apply plugin: 'java'
+apply plugin: 'maven'
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+    mavenLocal()
+}
+
+dependencies {
+    compile gradleApi()
+    compile 'org.codehaus.groovy:groovy-all:2.4.7'
+    compile 'com.github.mictaege:spoon-gradle-plugin:1.0'
+    compile 'com.github.mictaege:jitter-api:1.0'
+    compile 'org.eclipse.jdt:org.eclipse.jdt.core:3.12.2'
+}
