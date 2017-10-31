@@ -3,6 +3,8 @@ package com.github.mictaege.jitter.plugin
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 
+import static org.gradle.api.file.DuplicatesStrategy.EXCLUDE
+
 class JitterPlugin implements Plugin<Project>  {
 
     @Override
@@ -44,6 +46,25 @@ class JitterPlugin implements Plugin<Project>  {
             project.jitter.flavours.each {f ->
                 project.task("flavour$f", type: JitterTask) {
                     flavour = f
+                }
+            }
+        })
+
+        project.afterEvaluate({
+            project.processResources.configure {
+                setDuplicatesStrategy(EXCLUDE)
+                project.jitter.flavours.each { f ->
+                    rename { String fileName ->
+                        fileName.replace("_$f", "")
+                    }
+                }
+            }
+            project.processTestResources.configure {
+                setDuplicatesStrategy(EXCLUDE)
+                project.jitter.flavours.each { f ->
+                    rename { String fileName ->
+                        fileName.replace("_$f", "")
+                    }
                 }
             }
         })
