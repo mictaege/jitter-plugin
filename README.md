@@ -283,3 +283,18 @@ Here the ```PersonValidator``` class - which is used by the other parts of the a
 
 The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` -  must have the same API as the classed to be replaced. Template classes could either be nested or top level which is indicated by the ```nested``` flag. If the template classes are top level the have to be in the same package as the class to be replaced.
 
+## _jitter_ Resource Handling
+
+Any real-world application will not only contain Java source files, but also resources like property-, configuration- or other files and those resources my differ for each flavour of your application like the Java source files does.
+
+To make a resource file specific for a certain flavour with _jitter_ it's file name has to be suffixed with the name of the flavour. E.g. a specific version of ```Person.properties``` will have the name ```Person_CUSTOMER_B.properties```. Then _jitter_ forces Gradle to process such specific versions every time the tasks _processResources_ or _processTestResources_ are executed.
+
+It may be the case that there is an unspecific and one or more specific version of the resource - e.g. ```Person.properties``` _and_ ```Person_CUSTOMER_B.properties``` are existing - or it may be the case that only specific versions of the resource are existing - e.g. ```Person_CUSTOMER_A.properties```, ```Person_CUSTOMER_B.properties``` and/or ```Person_CUSTOMER_C.properties```.
+
+If a flavour is active - e.g. ```flavourCUSTOMER_B``` - the specific resources that are belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` -  will be renamed by removing the flavour prefix - e.g. renamed to ```Person.properties```. If there is an unspecific version of the resource - e.g. ```Person.properties``` - already exist this resource will be overwritten by the specific one.
+
+If another flavour is active ```flavourCUSTOMER_C```, all specific resources that are not belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` - will be omitted.
+
+If no flavour is active all specific resources - e.g. ```Person_CUSTOMER_B.properties``` - will be normalized by removing the flavour prefix - e.g. renamed to ```Person.properties``` - as long as there is no unspecific version of the resource. If there is already an unspecific version of the resource it won't be overwritten.
+
+
