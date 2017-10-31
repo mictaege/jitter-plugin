@@ -5,7 +5,7 @@
 
 >The _jitter-plugin_ is a Gradle plugin to build and distribute different flavours of an application from a single source base.
 
-A simple but complete example how _jitter_ works could be found on [eval.jitter](https://github.com/mictaege/eval.jitter). It's strongly recommended to check out this repository and to have also a closer look on the examples provided there.
+A simple but complete example how _jitter_ works could be found at [eval.jitter](https://github.com/mictaege/eval.jitter). It's strongly recommended to check out this repository and to have also a closer look on the examples provided there.
 
 ## Problem
 
@@ -13,9 +13,9 @@ A common problem in software development is that one application has to be adopt
 
 Well known approaches to address this problem are _Forking_, _Feature-Toggles_ or - at least in the C-World - _Preprocessors_.
 
-_jitter_ uses Java Annotations Processing backed up by the Java analysis and transformation framework [Spoon](http://spoon.gforge.inria.fr/index.html). This way _jitter_ acts more like an _Preprocessor_ and transforms the source code before it's finally compiled, but is far more integrated in the Java language and eco-system because of the use of plain Java Annotations.
+_jitter_ uses Java Annotation Processing backed up by the Java analysis and transformation framework [Spoon](http://spoon.gforge.inria.fr/index.html). This way _jitter_ acts more like an _Preprocessor_ and transforms the source code before it's finally compiled, but is far more integrated in the Java language and eco-system because of the use of plain Java Annotations.
 
-In order to get a first impression of _jitter_ let's have a look on a extremely simplified example.
+In order to get a first impression of _jitter_ let's have a look on an extremely simplified example.
 
 Let's imagine an application that has a _Person_ PoJo like this:
 
@@ -29,7 +29,7 @@ public class Person {
 }
 ```
 
-and we have the need to extend that _Person_ in a particular variant of the application - e.g. for a specific customer - with an additional field _birthday_. With _jitter_ we can do this in this way:
+and we have the need to extend that _Person_ in a particular variant of the application - e.g. for a specific customer - with an additional field _birthday_. With _jitter_ we can achieve this in that way:
 
 
 ```Java
@@ -238,7 +238,7 @@ private void initDefault(Strings[] args) {
 }
 ```
 
-Here the ```init()``` method - which is used by the other parts of the application - will be replaced by the template ```initA``` if the _CUSTOMER_A_ flavour is active, otherwise ```init()``` will be replaced with the template  ```initDefault()```. 
+Here the ```init()``` method - which is used by the other parts of the application - will be replaced by the template method ```initA``` if the _CUSTOMER_A_ flavour is active, otherwise ```init()``` will be replaced with the template  method ```initDefault()```. 
 
 The template methods - here ```initA``` and ```initDefault``` -  must have the same return type and parameter list (name and type) as the method to be replaced.
 
@@ -279,7 +279,7 @@ public class PersonValidatorC {
 }
 ```
 
-Here the ```PersonValidator``` class - which is used by the other parts of the application - will be replaced by the template ```PersonValidatorA``` if the _CUSTOMER_A_ flavour is active, by ```PersonValidatorB``` if the _CUSTOMER_B_ flavour is active and by ```PersonValidatorC``` if the _CUSTOMER_C_ flavour is active.
+Here the ```PersonValidator``` class - which is used by the other parts of the application - will be replaced by the template class ```PersonValidatorA``` if the _CUSTOMER_A_ flavour is active, by ```PersonValidatorB``` if the _CUSTOMER_B_ flavour is active and by ```PersonValidatorC``` if the _CUSTOMER_C_ flavour is active.
 
 The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` -  must have the same API as the classed to be replaced. Template classes could either be nested or top level which is indicated by the ```nested``` flag. If the template classes are top level the have to be in the same package as the class to be replaced.
 
@@ -291,7 +291,7 @@ To make a resource file specific for a certain flavour with _jitter_ it's file n
 
 It may be the case that there is an unspecific and one or more specific version of the resource - e.g. ```Person.properties``` _and_ ```Person_CUSTOMER_B.properties``` are existing - or it may be the case that only specific versions of the resource are existing - e.g. ```Person_CUSTOMER_A.properties```, ```Person_CUSTOMER_B.properties``` and/or ```Person_CUSTOMER_C.properties```.
 
-If a flavour is active - e.g. ```flavourCUSTOMER_B``` - the specific resources that are belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` -  will be renamed by removing the flavour prefix - e.g. renamed to ```Person.properties```. If there is an unspecific version of the resource - e.g. ```Person.properties``` - already exist this resource will be overwritten by the specific one.
+If a flavour is active - e.g. ```flavourCUSTOMER_B``` - the specific resources that are belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` -  will be renamed by removing the flavour prefix - e.g. renamed to ```Person.properties```. If an unspecific version of the resource - e.g. ```Person.properties``` - already exist this resource will be overwritten by the specific one.
 
 If another flavour is active ```flavourCUSTOMER_C```, all specific resources that are not belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` - will be omitted.
 
