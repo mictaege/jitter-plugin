@@ -5,9 +5,12 @@ import spoon.processing.AbstractAnnotationProcessor;
 import spoon.reflect.declaration.CtClass;
 import spoon.reflect.declaration.CtType;
 
+import java.util.Optional;
+
 import static com.github.mictaege.jitter.plugin.FlavourUtil.active;
 import static com.github.mictaege.jitter.plugin.FlavourUtil.anyVariant;
 import static java.lang.System.out;
+import static java.util.Optional.ofNullable;
 
 public class AlterClassProcessor extends AbstractAnnotationProcessor<Alter, CtClass<?>> {
 
@@ -18,20 +21,26 @@ public class AlterClassProcessor extends AbstractAnnotationProcessor<Alter, CtCl
             final String altClass = annotation.with();
             out.println("[jitter] Replace class " + clazz.getSimpleName() + " with " + altClass);
 
-            final CtType<?> altType;
+            final Optional<CtType<?>> altType;
             if (annotation.nested()) {
-                altType = clazz.getNestedType(altClass);
+                altType = ofNullable(clazz.getNestedType(altClass));
             } else {
-                altType = clazz.getPackage().getType(altClass);
+                if (altClass.contains(".")) {
+                    altType = ofNullable(getFactory().Class().get(altClass));
+                } else {
+                    altType = ofNullable(clazz.getPackage().getType(altClass));
+                }
             }
 
-            if (altType == null) {
+            if (!altType.isPresent()) {
                 throw new IllegalStateException("[ERROR] The given alternative class " + altClass + " could not be found");
+            } else {
+                final CtType<?> type = altType.get();
+                type.setSimpleName(clazz.getSimpleName());
+                type.setModifiers(clazz.getModifiers());
+                clazz.replace(type);
             }
 
-            altType.setSimpleName(clazz.getSimpleName());
-            altType.setModifiers(clazz.getModifiers());
-            clazz.replace(altType);
         }
     }
 
