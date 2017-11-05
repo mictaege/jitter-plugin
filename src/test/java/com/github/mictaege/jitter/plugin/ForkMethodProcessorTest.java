@@ -1,25 +1,17 @@
 package com.github.mictaege.jitter.plugin;
 
 import com.github.mictaege.jitter.api.Fork;
-import com.github.mictaege.jitter.api.OnlyIf;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import spoon.reflect.code.CtBlock;
 import spoon.reflect.code.CtStatement;
 import spoon.reflect.declaration.CtMethod;
 import spoon.reflect.declaration.CtType;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-
-import static com.github.mictaege.jitter.plugin.FlavourUtil.KEY;
-import static java.util.Arrays.asList;
+import static com.github.mictaege.jitter.plugin.JitterUtil.FLAVOUR_PROP;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
-import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -55,7 +47,7 @@ public class ForkMethodProcessorTest {
 
     @Test
     public void shouldNotReplaceIfNoMatchingFlavour() {
-        System.setProperty(KEY, "Y");
+        System.setProperty(FLAVOUR_PROP, "Y");
 
         processor.process(annotation, method);
 
@@ -65,7 +57,7 @@ public class ForkMethodProcessorTest {
 
     @Test
     public void shouldReplaceIfMatchingFlavour() {
-        System.setProperty(KEY, "X");
+        System.setProperty(FLAVOUR_PROP, "X");
 
         processor.process(annotation, method);
 
@@ -73,15 +65,15 @@ public class ForkMethodProcessorTest {
         verify(barMethod).delete();
     }
 
-    @Test(expected = IllegalStateException.class)
-    public void shouldThrowErrorIfForkMethodIsMissing() {
-        System.setProperty(KEY, "X");
+    @Test
+    public void shouldSkipIfForkMethodIsMissing() {
+        System.setProperty(FLAVOUR_PROP, "X");
         when(type.getMethodsByName("bar")).thenReturn(emptyList());
 
         processor.process(annotation, method);
 
-        verify(method).setBody(barBody);
-        verify(barMethod).delete();
+        verify(method, never()).setBody(barBody);
+        verify(barMethod, never()).delete();
     }
 
 }

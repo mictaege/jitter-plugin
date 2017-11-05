@@ -20,6 +20,7 @@ class JitterPlugin implements Plugin<Project>  {
             project.spoonMain.processors = [
                     'com.github.mictaege.jitter.plugin.AlterClassProcessor',
                     'com.github.mictaege.jitter.plugin.ForkMethodProcessor',
+                    'com.github.mictaege.jitter.plugin.OnlyIfPackageProcessor',
                     'com.github.mictaege.jitter.plugin.OnlyIfClassProcessor',
                     'com.github.mictaege.jitter.plugin.OnlyIfFieldProcessor',
                     'com.github.mictaege.jitter.plugin.OnlyIfMethodProcessor',
@@ -33,6 +34,7 @@ class JitterPlugin implements Plugin<Project>  {
             project.spoonTest.processors = [
                     'com.github.mictaege.jitter.plugin.AlterClassProcessor',
                     'com.github.mictaege.jitter.plugin.ForkMethodProcessor',
+                    'com.github.mictaege.jitter.plugin.OnlyIfPackageProcessor',
                     'com.github.mictaege.jitter.plugin.OnlyIfClassProcessor',
                     'com.github.mictaege.jitter.plugin.OnlyIfFieldProcessor',
                     'com.github.mictaege.jitter.plugin.OnlyIfMethodProcessor',
