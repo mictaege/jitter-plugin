@@ -13,9 +13,9 @@ class JitterTask extends DefaultTask {
     void run() {
         System.properties.setProperty("jitter.active.flavour", flavour)
 
-        if (FlavourUtil.anyVariant()) {
+        if (JitterUtil.anyVariant()) {
             project.jitter.flavours.each {f ->
-                if (FlavourUtil.active(f)) {
+                if (JitterUtil.active(f)) {
                     project.processResources.configure {
                         setDuplicatesStrategy(INCLUDE)
                         filesMatching("**/*_$f.*") {

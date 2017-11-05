@@ -4,9 +4,11 @@ import com.github.mictaege.jitter.api.Fork;
 import spoon.processing.AbstractAnnotationProcessor;
 import spoon.reflect.declaration.CtMethod;
 
-import static com.github.mictaege.jitter.plugin.FlavourUtil.active;
-import static com.github.mictaege.jitter.plugin.FlavourUtil.anyVariant;
-import static java.lang.System.out;
+import java.util.Optional;
+
+import static com.github.mictaege.jitter.plugin.JitterUtil.active;
+import static com.github.mictaege.jitter.plugin.JitterUtil.anyVariant;
+import static com.github.mictaege.jitter.plugin.JitterUtil.log;
 
 public class ForkMethodProcessor extends AbstractAnnotationProcessor<Fork, CtMethod<?>> {
 
@@ -15,12 +17,14 @@ public class ForkMethodProcessor extends AbstractAnnotationProcessor<Fork, CtMet
         final String flavour = annotation.ifActive();
         if (anyVariant() && active(flavour)) {
             final String altName = annotation.to();
-            final CtMethod<?> alternative = method.getDeclaringType().getMethodsByName(altName).stream()
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalStateException("[ERROR] The given alternative method " + altName + " could not be found"));
-            out.println("[jitter] Replace method " + method.getDeclaringType().getSimpleName() + "#" + method.getSimpleName() + " with #" + altName);
-            method.setBody(alternative.getBody());
-            alternative.delete();
+            final Optional<CtMethod<?>> altMethod = method.getDeclaringType().getMethodsByName(altName).stream().findFirst();
+            if (altMethod.isPresent()) {
+                log().info("Replace method " + method.getDeclaringType().getSimpleName() + "#" + method.getSimpleName() + " with #" + altName);
+                method.setBody(altMethod.get().getBody());
+                altMethod.get().delete();
+            } else {
+                log().error("The given alternative method " + altName + " could not be found");
+            }
         }
     }
 

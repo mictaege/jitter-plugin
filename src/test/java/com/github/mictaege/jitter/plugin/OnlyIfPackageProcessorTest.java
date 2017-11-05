@@ -6,7 +6,7 @@ import org.junit.Test;
 import org.mockito.Mock;
 import spoon.reflect.declaration.CtPackage;
 
-import static com.github.mictaege.jitter.plugin.FlavourUtil.KEY;
+import static com.github.mictaege.jitter.plugin.JitterUtil.FLAVOUR_PROP;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -31,7 +31,7 @@ public class OnlyIfPackageProcessorTest {
 
     @Test
     public void shouldDeleteIfNoMatchingFlavour() {
-        System.setProperty(KEY, "Y");
+        System.setProperty(FLAVOUR_PROP, "Y");
 
         processor.process(annotation, pck);
 
@@ -40,7 +40,7 @@ public class OnlyIfPackageProcessorTest {
 
     @Test
     public void shouldNotDeleteIfMatchingFlavour() {
-        System.setProperty(KEY, "X");
+        System.setProperty(FLAVOUR_PROP, "X");
 
         processor.process(annotation, pck);
 

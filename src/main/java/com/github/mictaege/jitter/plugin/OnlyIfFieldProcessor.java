@@ -6,7 +6,7 @@ import spoon.reflect.declaration.CtField;
 
 import java.util.List;
 
-import static java.lang.System.out;
+import static com.github.mictaege.jitter.plugin.JitterUtil.log;
 import static java.util.Arrays.asList;
 
 public class OnlyIfFieldProcessor extends AbstractAnnotationProcessor<OnlyIf, CtField<?>> {
@@ -14,8 +14,8 @@ public class OnlyIfFieldProcessor extends AbstractAnnotationProcessor<OnlyIf, Ct
     @Override
     public void process(final OnlyIf annotation, final CtField<?> field) {
         final List<String> flavours = asList(annotation.value());
-        if (flavours.stream().noneMatch(FlavourUtil::active)) {
-            out.println("[jitter] Remove field " + field.getDeclaringType().getSimpleName() + "#" + field.getSimpleName());
+        if (flavours.stream().noneMatch(JitterUtil::active)) {
+            log().info("Remove field " + field.getDeclaringType().getSimpleName() + "#" + field.getSimpleName());
             field.delete();
         }
     }

@@ -6,7 +6,7 @@ import spoon.reflect.declaration.CtPackage;
 
 import java.util.List;
 
-import static java.lang.System.out;
+import static com.github.mictaege.jitter.plugin.JitterUtil.log;
 import static java.util.Arrays.asList;
 
 public class OnlyIfPackageProcessor extends AbstractAnnotationProcessor<OnlyIf, CtPackage> {
@@ -14,8 +14,8 @@ public class OnlyIfPackageProcessor extends AbstractAnnotationProcessor<OnlyIf, 
     @Override
     public void process(OnlyIf annotation, CtPackage pck) {
         final List<String> flavours = asList(annotation.value());
-        if (flavours.stream().noneMatch(FlavourUtil::active)) {
-            out.println("[jitter] Remove package " + pck.getSimpleName());
+        if (flavours.stream().noneMatch(JitterUtil::active)) {
+            log().info("Remove package " + pck.getSimpleName());
             pck.delete();
         }
     }
