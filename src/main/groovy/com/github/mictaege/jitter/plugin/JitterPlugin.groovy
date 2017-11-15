@@ -1,7 +1,9 @@
 package com.github.mictaege.jitter.plugin
 
+import com.github.mictaege.spoon_gradle_plugin.SpoonTask
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.language.jvm.tasks.ProcessResources
 
 import static org.gradle.api.file.DuplicatesStrategy.EXCLUDE
 
@@ -17,31 +19,21 @@ class JitterPlugin implements Plugin<Project>  {
         }
 
         project.afterEvaluate({
-            project.spoonMain.processors = [
-                    'com.github.mictaege.jitter.plugin.AlterClassProcessor',
-                    'com.github.mictaege.jitter.plugin.ForkMethodProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfPackageProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfClassProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfFieldProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfMethodProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfConstructorProcessor'
-            ]
 
-            project.spoonMain.compliance = project.jitter.compliance
-        })
+            project.tasks.withType(SpoonTask) {
+                it.processors = [
+                        'com.github.mictaege.jitter.plugin.AlterClassProcessor',
+                        'com.github.mictaege.jitter.plugin.ForkMethodProcessor',
+                        'com.github.mictaege.jitter.plugin.OnlyIfPackageProcessor',
+                        'com.github.mictaege.jitter.plugin.OnlyIfClassProcessor',
+                        'com.github.mictaege.jitter.plugin.OnlyIfFieldProcessor',
+                        'com.github.mictaege.jitter.plugin.OnlyIfMethodProcessor',
+                        'com.github.mictaege.jitter.plugin.OnlyIfConstructorProcessor'
+                ]
 
-        project.afterEvaluate({
-            project.spoonTest.processors = [
-                    'com.github.mictaege.jitter.plugin.AlterClassProcessor',
-                    'com.github.mictaege.jitter.plugin.ForkMethodProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfPackageProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfClassProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfFieldProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfMethodProcessor',
-                    'com.github.mictaege.jitter.plugin.OnlyIfConstructorProcessor'
-            ]
+                it.compliance = project.jitter.compliance
+            }
 
-            project.spoonTest.compliance = project.jitter.compliance
         })
 
         project.afterEvaluate({
@@ -53,22 +45,18 @@ class JitterPlugin implements Plugin<Project>  {
         })
 
         project.afterEvaluate({
-            project.processResources.configure {
-                setDuplicatesStrategy(EXCLUDE)
-                project.jitter.flavours.each { f ->
-                    rename { String fileName ->
-                        fileName.replace("_$f", "")
+
+            project.tasks.withType(ProcessResources) {
+                it.configure {
+                    setDuplicatesStrategy(EXCLUDE)
+                    project.jitter.flavours.each { f ->
+                        rename { String fileName ->
+                            fileName.replace("_$f", "")
+                        }
                     }
                 }
             }
-            project.processTestResources.configure {
-                setDuplicatesStrategy(EXCLUDE)
-                project.jitter.flavours.each { f ->
-                    rename { String fileName ->
-                        fileName.replace("_$f", "")
-                    }
-                }
-            }
+
         })
 
     }
