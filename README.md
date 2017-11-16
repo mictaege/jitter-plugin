@@ -136,7 +136,7 @@ So for example if you like to build the _CUSTOMER_A_ flavour you have to type
 
 ```Groovy
 gradle flavourCUSTOMER_A clean build
-```
+``` 
 
 **Note** If the application was build or run with another flavour before, the next build or run should always include a clean.
 
@@ -147,6 +147,14 @@ gradle clean test
 ```
 
 will execute all tests, even if a test is marked for a specific flavour.
+
+It's also possible to select the flavour in a _gradle.properties_ file permanently
+
+```Properties
+systemProp.jitter.active.flavour=CUSTOMER_A
+```
+
+In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Such a permanently selected flavour in the _gradle.properties_ file will be overwritten by an explicit ```flavourXyz``` selection, so ```gradle flavourCUSTOMER_B clean build``` will build flavour _CUSTOMER_B_ even if flavour _CUSTOMER_A_ is defined in the _gradle.properties_ file. 
 
 ## _jitter_ Source Code Markup
 
