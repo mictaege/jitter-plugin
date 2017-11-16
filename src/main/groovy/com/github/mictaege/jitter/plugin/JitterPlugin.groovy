@@ -3,9 +3,6 @@ package com.github.mictaege.jitter.plugin
 import com.github.mictaege.spoon_gradle_plugin.SpoonExtension
 import org.gradle.api.Plugin
 import org.gradle.api.Project
-import org.gradle.language.jvm.tasks.ProcessResources
-
-import static org.gradle.api.file.DuplicatesStrategy.EXCLUDE
 
 class JitterPlugin implements Plugin<Project>  {
 
@@ -46,18 +43,7 @@ class JitterPlugin implements Plugin<Project>  {
         })
 
         project.afterEvaluate({
-
-            project.tasks.withType(ProcessResources) {
-                it.configure {
-                    setDuplicatesStrategy(EXCLUDE)
-                    project.jitter.flavours.each { f ->
-                        rename { String fileName ->
-                            fileName.replace("_$f", "")
-                        }
-                    }
-                }
-            }
-
+            project.getGradle().getTaskGraph().addTaskExecutionListener(new ProcessResourcesListener(project))
         })
 
     }
