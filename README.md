@@ -119,6 +119,15 @@ jitter {
 }
 ```
 
+If certain source sets should be excluded from _jitter_ processing the have to be named in the _jitter_ section:
+
+```Groovy
+jitter {
+    flavours = ['CUSTOMER_A', 'CUSTOMER_B', 'CUSTOMER_C']
+    exclude = ['main', 'test']
+}
+```
+
 A complete example of a Gradle build using _jitter_ could be found in the [eval.jitter](https://github.com/mictaege/eval.jitter/blob/master/build.gradle) example.
 
 Once _jitter_ is applied and the flavours of the application are configured the project now has an additional Gradle task for each configured flavour. In the example above these would be the tasks ```flavourCUSTOMER_A```, ```flavourCUSTOMER_B``` and ```flavourCUSTOMER_C```. These additional ```flavourXyz``` tasks are used to select the flavour which should be build or run.
