@@ -119,6 +119,15 @@ jitter {
 }
 ```
 
+If certain source sets should be excluded from _jitter_ processing the have to be named in the _jitter_ section:
+
+```Groovy
+jitter {
+    flavours = ['CUSTOMER_A', 'CUSTOMER_B', 'CUSTOMER_C']
+    exclude = ['main', 'test']
+}
+```
+
 A complete example of a Gradle build using _jitter_ could be found in the [eval.jitter](https://github.com/mictaege/eval.jitter/blob/master/build.gradle) example.
 
 Once _jitter_ is applied and the flavours of the application are configured the project now has an additional Gradle task for each configured flavour. In the example above these would be the tasks ```flavourCUSTOMER_A```, ```flavourCUSTOMER_B``` and ```flavourCUSTOMER_C```. These additional ```flavourXyz``` tasks are used to select the flavour which should be build or run.
@@ -127,7 +136,7 @@ So for example if you like to build the _CUSTOMER_A_ flavour you have to type
 
 ```Groovy
 gradle flavourCUSTOMER_A clean build
-```
+``` 
 
 **Note** If the application was build or run with another flavour before, the next build or run should always include a clean.
 
@@ -138,6 +147,14 @@ gradle clean test
 ```
 
 will execute all tests, even if a test is marked for a specific flavour.
+
+It's also possible to select the flavour in a _gradle.properties_ file permanently
+
+```Properties
+systemProp.jitter.active.flavour=CUSTOMER_A
+```
+
+In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Such a permanently selected flavour in the _gradle.properties_ file will be overwritten by an explicit ```flavourXyz``` selection, so ```gradle flavourCUSTOMER_B clean build``` will build flavour _CUSTOMER_B_ even if flavour _CUSTOMER_A_ is defined in the _gradle.properties_ file. 
 
 ## _jitter_ Source Code Markup
 
