@@ -9,6 +9,10 @@ apply plugin: 'signing'
 
 sourceCompatibility = 1.8
 
+task wrapper(type: Wrapper) {
+    gradleVersion = '4.2.1'
+}
+
 repositories {
     mavenCentral()
     mavenLocal()
