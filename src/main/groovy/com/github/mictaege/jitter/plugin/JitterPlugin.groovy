@@ -17,7 +17,6 @@ class JitterPlugin implements Plugin<Project>  {
 
             project.spoon.lazyExtensions = { ->
                     def spoonExt = new SpoonExtension()
-                    spoonExt.buildOnlyOutdatedFiles = true
                     spoonExt.processors = [
                             'com.github.mictaege.jitter.plugin.AlterClassProcessor',
                             'com.github.mictaege.jitter.plugin.ForkMethodProcessor',
@@ -29,7 +28,12 @@ class JitterPlugin implements Plugin<Project>  {
                     ]
                     spoonExt.compliance = project.jitter.compliance
                     spoonExt.exclude = project.jitter.exclude
-                    return spoonExt
+                    spoonExt.fileFilter = { File srcFile ->
+                        def pckInfo = new File(srcFile.parentFile, "package-info.java")
+                        def pckInfoVar = pckInfo.exists() && pckInfo.text.contains("com.github.mictaege.jitter.api")
+                        pckInfoVar || srcFile.text.contains("com.github.mictaege.jitter.api")
+                    }
+                    spoonExt
                 }
 
         }
