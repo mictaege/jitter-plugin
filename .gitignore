@@ -4,6 +4,6 @@
 \.gradle/
 
 build/
-build/
+build
 
 out/
