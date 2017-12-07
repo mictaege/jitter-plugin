@@ -314,9 +314,9 @@ class PersonValidatorC {
 
 Here the ```PersonValidator``` class - which is used by the other parts of the application - will be replaced by the template class ```PersonValidatorA/B/C``` if the _CUSTOMER_A/B/C_ flavour is active.
 
-The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` - are linked with the ````with````flag of the ```@Alter``` annotation. If the template classes is inside the same package as the target class to be altered the template class could be linked with the simple name. Template classes could be declared in the same Java file as the target class - which is a common use case - but has to be a top level class since nested classes are not allowed.
+The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` - are linked with the ````with````flag of the ```@Alter``` annotation. If the template classes is inside the same package as the target class to be altered the template class could be linked with the simple name, otherwise the fully qualified name. Template classes could be declared in the same Java file as the target class - which is a common use case - but has to be a top level class since nested classes are not allowed.
 
-During replacement the simple name and the class visibility of the target class are transferred to the template class. All other parts of the class declaration are resulting from the template class.
+During replacement only the package, the simple name and the class visibility of the target class are transferred to the template class. All other parts of the class are resulting from the template class.
 
 Example:
 
@@ -332,17 +332,21 @@ public class PersonValidator {
         throw new IllegalStateException("Not implemented.");
     }
 }
+```
 
-@OnlyIf(Flavour.CUSTOMER_A)
+```Java
+package myproject.somewhereelse;
+
+@OnlyIf(Flavour.CUSTOMER_C)
 @SupressWarnings("X")
-final class PersonValidatorA extends AbstractValidator<Person> implements Observable {
+final class PersonValidatorC extends AbstractValidator<Person> implements Observable {
     protected void validate(final Person person) {
         //..
     }
 }    
 ```
 
-Will result in the following code it the ```Flavour.CUSTOMER_A``` is active 
+Will result in the following code if the ```Flavour.CUSTOMER_C``` is active 
 
 ```Java
 package myproject;
