@@ -263,42 +263,101 @@ The template methods - here ```initA``` and ```initDefault``` -  must have the s
 
 _@Alter_ defines an alternative implementation of a class, therefore _@Alter_ could only be applied to types.
 
+File _myproject/PersonValidator.java_
+
 ```Java
-@Alter(ifActive = Flavour.CUSTOMER_A, with = "PersonValidatorA", nested = true)
-@Alter(ifActive = Flavour.CUSTOMER_B, with = "PersonValidatorB", nested = true)
-@Alter(ifActive = Flavour.CUSTOMER_C, with = "PersonValidatorC")
+package myproject;
+
+@Alter(ifActive = Flavour.CUSTOMER_A, with = "PersonValidatorA")
+@Alter(ifActive = Flavour.CUSTOMER_B, with = "PersonValidatorB")
+@Alter(ifActive = Flavour.CUSTOMER_C, with = "myproject.somewhereelse.PersonValidatorC")
 public class PersonValidator {
     
     public void validate(Person person) {
         throw new IllegalStateException("Not implemented.");
     }
-    
-    @OnlyIf(Flavour.CUSTOMER_A)
-    static class PersonValidatorA {
-        public void validate(Person person) {
-            //..
-        }
-    }
-    
-    @OnlyIf(Flavour.CUSTOMER_B)
-    static class PersonValidatorB {
-        public void validate(Person person) {
-            //..
-        }
-    }
 }
 
-@OnlyIf(Flavour.CUSTOMER_C)
-public class PersonValidatorC {
+@OnlyIf(Flavour.CUSTOMER_A)
+class PersonValidatorA {
+    public void validate(Person person) {
+        //..
+    }
+}    
+```
+
+File _myproject/PersonValidatorB.java_
+
+```Java
+package myproject;
+
+@OnlyIf(Flavour.CUSTOMER_B)
+class PersonValidatorB {
     public void validate(Person person) {
         //..
     }
 }
 ```
 
-Here the ```PersonValidator``` class - which is used by the other parts of the application - will be replaced by the template class ```PersonValidatorA``` if the _CUSTOMER_A_ flavour is active, by ```PersonValidatorB``` if the _CUSTOMER_B_ flavour is active and by ```PersonValidatorC``` if the _CUSTOMER_C_ flavour is active.
+File _myproject/somewhereelse/PersonValidatorB.java_
 
-The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` -  must have the same API as the classed to be replaced. Template classes could either be nested or top level which is indicated by the ```nested``` flag. If the template classes are top level the have to be in the same package as the class to be replaced.
+```Java
+package myproject.somewhereelse;
+
+@OnlyIf(Flavour.CUSTOMER_C)
+class PersonValidatorC {
+    public void validate(Person person) {
+        //..
+    }
+}
+```
+
+Here the ```PersonValidator``` class - which is used by the other parts of the application - will be replaced by the template class ```PersonValidatorA/B/C``` if the _CUSTOMER_A/B/C_ flavour is active.
+
+The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` - are linked with the ````with````flag of the ```@Alter``` annotation. If the template classes is inside the same package as the target class to be altered the template class could be linked with the simple name, otherwise the fully qualified name. Template classes could be declared in the same Java file as the target class - which is a common use case - but has to be a top level class since nested classes are not allowed.
+
+During replacement only the package, the simple name and the class visibility of the target class are transferred to the template class. All other parts of the class are resulting from the template class.
+
+Example:
+
+```Java
+package myproject;
+
+@Alter(ifActive = Flavour.CUSTOMER_A, with = "PersonValidatorA")
+@Alter(ifActive = Flavour.CUSTOMER_B, with = "PersonValidatorB")
+@Alter(ifActive = Flavour.CUSTOMER_C, with = "myproject.somewhereelse.PersonValidatorC")
+public class PersonValidator {
+    
+    public void validate(Person person) {
+        throw new IllegalStateException("Not implemented.");
+    }
+}
+```
+
+```Java
+package myproject.somewhereelse;
+
+@OnlyIf(Flavour.CUSTOMER_C)
+@SupressWarnings("X")
+final class PersonValidatorC extends AbstractValidator<Person> implements Observable {
+    protected void validate(final Person person) {
+        //..
+    }
+}    
+```
+
+Will result in the following code if the ```Flavour.CUSTOMER_C``` is active 
+
+```Java
+package myproject;
+
+@SupressWarnings("X")
+public final class PersonValidator extends AbstractValidator<Person> implements Observable {
+    protected void validate(final Person person) {
+        //..
+    }
+}
+```   
 
 ## _jitter_ Resource Handling
 
