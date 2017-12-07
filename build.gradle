@@ -1,5 +1,5 @@
 group 'com.github.mictaege'
-version '1.7-SNAPSHOT'
+version '1.7'
 
 apply plugin: 'groovy'
 apply plugin: 'java'
