@@ -4,12 +4,13 @@ import com.github.mictaege.spoon_gradle_plugin.SpoonExtension
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 
+import java.util.regex.Pattern
+
 class JitterPlugin implements Plugin<Project>  {
 
     @Override
     void apply(final Project project) {
         project.extensions.create "jitter", JitterExtension
-
 
         project.configure(project) {
             apply plugin: 'java'
@@ -27,7 +28,7 @@ class JitterPlugin implements Plugin<Project>  {
                             'com.github.mictaege.jitter.plugin.OnlyIfConstructorProcessor'
                     ]
                     spoonExt.compliance = project.jitter.compliance
-                    spoonExt.exclude = project.jitter.exclude
+                    spoonExt.exclude = project.jitter.excludeSrcSets
                     spoonExt.fileFilter = { File srcFile ->
                         def pckInfo = new File(srcFile.parentFile, "package-info.java")
                         def pckInfoVar = pckInfo.exists() && pckInfo.text.contains("com.github.mictaege.jitter.api")
@@ -40,10 +41,24 @@ class JitterPlugin implements Plugin<Project>  {
 
         project.afterEvaluate({
             project.jitter.flavours.each {f ->
-                project.task("flavour$f", type: JitterTask) {
+                project.task("flavour${f.name}", type: JitterTask) {
                     flavour = f
                 }
             }
+        })
+
+        project.afterEvaluate({
+            project.jitter.flavours.each { fl ->
+                fl.criticalTerms.patterns.each { p ->
+                    try {
+                        Pattern.compile(p)
+                    } catch (RuntimeException e) {
+                        throw new IllegalArgumentException("Flavour '${fl.name}' contains a critical term with an invalid regular expression '$p': ${e.getLocalizedMessage()}")
+                    }
+                }
+            }
+            project.task("reportCriticalTerms", type:ReportCriticalTermsTask)
+            project.task("verifyCriticalTerms", type:VerifyCriticalTermsTask)
         })
 
         project.afterEvaluate({

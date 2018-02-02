@@ -25,24 +25,24 @@ class ProcessResourcesListener implements TaskExecutionListener {
                 setDuplicatesStrategy(EXCLUDE)
                 project.jitter.flavours.each { f ->
                     rename { String fileName ->
-                        fileName.replace("_$f", "")
+                        fileName.replace("_${f.name}", "")
                     }
                 }
             }
-            if(JitterUtil.anyVariant()) {
+            if(JitterUtil.anyFlavour()) {
                 project.jitter.flavours.each {f ->
-                    if (JitterUtil.active(f)) {
+                    if (JitterUtil.active(f.name)) {
                         task.configure {
                             setDuplicatesStrategy(INCLUDE)
-                            filesMatching("**/*_$f.*") {
+                            filesMatching("**/*_${f.name}.*") {
                                 rename { String fileName ->
-                                    fileName.replace("_$f", "")
+                                    fileName.replace("_${f.name}", "")
                                 }
                             }
                         }
                     } else {
                         task.configure {
-                            excludes.add("**/*_$f.*")
+                            excludes.add("**/*_${f.name}.*")
                         }
                     }
                 }

@@ -1,7 +1,7 @@
 package com.github.mictaege.jitter.plugin;
 
 import static com.github.mictaege.jitter.plugin.JitterUtil.active;
-import static com.github.mictaege.jitter.plugin.JitterUtil.anyVariant;
+import static com.github.mictaege.jitter.plugin.JitterUtil.anyFlavour;
 import static com.github.mictaege.jitter.plugin.JitterUtil.log;
 import static java.util.Optional.ofNullable;
 
@@ -19,7 +19,7 @@ public class AlterClassProcessor extends AbstractAnnotationProcessor<Alter, CtCl
     @Override
     public void process(final Alter annotation, final CtClass<?> clazz) {
         final String flavour = annotation.ifActive();
-        if (anyVariant() && active(flavour)) {
+        if (anyFlavour() && active(flavour)) {
             final String altClass = annotation.with();
             log().info("Replace class " + clazz.getSimpleName() + " with " + altClass);
 

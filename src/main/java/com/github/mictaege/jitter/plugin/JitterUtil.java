@@ -1,10 +1,10 @@
 package com.github.mictaege.jitter.plugin;
 
-import org.gradle.api.logging.Logger;
-import org.gradle.api.logging.Logging;
-
 import static java.lang.System.getProperty;
 import static java.util.Optional.ofNullable;
+
+import org.gradle.api.logging.Logger;
+import org.gradle.api.logging.Logging;
 
 final class JitterUtil {
 
@@ -21,7 +21,7 @@ final class JitterUtil {
                 .orElse(true);
     }
 
-    static boolean anyVariant() {
+    static boolean anyFlavour() {
         return ofNullable(getProperty(FLAVOUR_PROP))
                 .map(p -> p.length() > 0 )
                 .orElse(false);

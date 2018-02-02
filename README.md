@@ -115,7 +115,15 @@ and finally you can configure the flavours of your application in a _jitter_ sec
 
 ```Groovy
 jitter {
-    flavours = ['CUSTOMER_A', 'CUSTOMER_B', 'CUSTOMER_C']
+    flavour {
+        name = 'CUSTOMER_A'
+    }
+    flavour {
+        name = 'CUSTOMER_B'
+    }
+    flavour {
+        name = 'CUSTOMER_C'
+    }
 }
 ```
 
@@ -123,8 +131,16 @@ If certain source sets should be excluded from _jitter_ processing the have to b
 
 ```Groovy
 jitter {
-    flavours = ['CUSTOMER_A', 'CUSTOMER_B', 'CUSTOMER_C']
-    exclude = ['main', 'test']
+    flavour {
+        name = 'CUSTOMER_A'
+    }
+    flavour {
+        name = 'CUSTOMER_B'
+    }
+    flavour {
+        name = 'CUSTOMER_C'
+    }
+    excludeSrcSets = ['main', 'test']
 }
 ```
 
@@ -373,4 +389,45 @@ If another flavour is active ```flavourCUSTOMER_C```, all specific resources tha
 
 If no flavour is active all specific resources - e.g. ```Person_CUSTOMER_B.properties``` - will be normalized by removing the flavour prefix - e.g. renamed to ```Person.properties``` - as long as there is no unspecific version of the resource. If there is already an unspecific version of the resource it won't be overwritten.
 
+## Verification of critical terms
 
+A code base may contain critical terms like flavour specific company names, account numbers etc. In this case it must be ensured that the build artifacts of one flavour does not contain any critical terms of another flavour. E.g. if the flavour _CUSTOMER_A_ defines the critical term _A Ltd._ this term musts not be contained in the build artifacts of flavour _CUSTOMER_B_ and vice versa the critical term _B Ltd._ defined by flavour _CUSTOMER_B_ must not be contained in the build artifacts of the flavour _CUSTOMER_A_.
+
+Therefore a flavour is able to declare it's critical terms that must not be used by other flavours:
+
+```Gradle
+jitter {
+    flavour {
+        name = 'CUSTOMER_A'
+        criticalTerms {
+            patterns = ['\\b(?i)(a ltd.)\\b', '\\b(?i)(a ltd. germay)\\b']
+            patterns << 'Hamburg'
+            excludes << '**/*.html'
+            includes << 'scripts/**'
+            sizeLimitKb = 200
+        }
+    }
+    flavour {
+        name = 'CUSTOMER_B'
+        criticalTerms {
+            patterns = ['\\b(?i)(b ltd.)\\b', '\\b(?i)(b ltd. germay)\\b']
+        }
+    }
+}
+```
+
+Explanation:
+- The ```patterns``` property takes a list of regular expression that declares the critical terms of this flavour. The critical terms could be declared at once using an array of expressions, or be added step by step using the left shift operator ```<<```. Please refer to the ```java.util.regex.Pattern``` documentation for details about the regular expressions.
+- The ```excludes``` property takes a list of file filters that will be applied to the _build_ directory in order to exclude certain resources from the verification. The file filters could be declared at once using an array of filters, or step by step using the left shift operator ```<<```. If the filters are only added with the left shift operator the defaults - ```'**/*.jpg', '**/*.jpeg', '**/*.png', '**/*.gif', '**/*.tif', '**/*.ico', '**/*.zip', '**/*.tar', '**/*.gz', '**/*.jar', '**/*.war', '**/*.ear'``` - will not be overwritten. Please refer to the gradle _FileTree_ documentation for details about file filters.
+- The ```includes``` property takes a list of file filters that will be applied to the _build_ directory in order to include certain resources to the verification. The file filters could be declared at once using an array of filters, or step by step using the left shift operator ```<<```. If the filters are only added with the left shift operator the defaults - ```''generated-sources/spoon/**', 'resources/**'``` - will not be overwritten. Please refer to the gradle _FileTree_ documentation for details about file filters.
+- The ```sizeLimitKb``` property defines a limit in kilo bytes. Larger files which may slow down the verification process will not be verified at all. The default value is 250 KB.
+
+The verification for critical terms could be executed using the gradle tasks ```reportCriticalTerms``` or ```verifyCriticalTerms```. E.g:
+
+```Gradle
+gradlew flavourCUSTOMER_A clean build verifyCriticalTerms
+```
+
+- Note that the ```reportCriticalTerms``` or ```verifyCriticalTerms``` task does not copy any resources into the _build_ folder itself and should therefore normally used as an additional task along with a _build_ or _copy_ task
+- Both tasks are creating a report into _build/reports/jitter/CriticalTermsReport.html_
+- While the ```reportCriticalTerms``` task creates only the report, the ```verifyCriticalTerms``` task forces the build to fail if any critical term is violated
