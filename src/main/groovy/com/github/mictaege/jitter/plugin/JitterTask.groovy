@@ -7,11 +7,11 @@ import static com.github.mictaege.jitter.plugin.JitterUtil.FLAVOUR_PROP
 
 class JitterTask extends DefaultTask {
 
-    String flavour
+    FlavourCfg flavour
 
     @TaskAction
     void run() {
-        System.properties.setProperty(FLAVOUR_PROP, flavour)
+        System.properties.setProperty(FLAVOUR_PROP, flavour.name)
     }
 
 }

@@ -1,11 +1,11 @@
 package com.github.mictaege.jitter.plugin;
 
-import org.junit.Test;
-
 import static com.github.mictaege.jitter.plugin.JitterUtil.FLAVOUR_PROP;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.junit.Assert.assertThat;
+
+import org.junit.Test;
 
 public class JitterUtilTest {
 
@@ -35,18 +35,18 @@ public class JitterUtilTest {
     @Test
     public void shouldIndicateAnyIfPropertyPresent() {
         System.setProperty(FLAVOUR_PROP, "X");
-        assertThat(JitterUtil.anyVariant(), is(true));
+        assertThat(JitterUtil.anyFlavour(), is(true));
     }
 
     @Test
     public void shouldIndicateNoneIfPropertyEmpty() {
         System.setProperty(FLAVOUR_PROP, "");
-        assertThat(JitterUtil.anyVariant(), is(false));
+        assertThat(JitterUtil.anyFlavour(), is(false));
     }
 
     @Test
     public void shouldIndicateNoneIfNoProperty() {
-        assertThat(JitterUtil.anyVariant(), is(false));
+        assertThat(JitterUtil.anyFlavour(), is(false));
     }
 
     @Test
