@@ -389,6 +389,8 @@ If another flavour is active ```flavourCUSTOMER_C```, all specific resources tha
 
 If no flavour is active all specific resources - e.g. ```Person_CUSTOMER_B.properties``` - will be normalized by removing the flavour prefix - e.g. renamed to ```Person.properties``` - as long as there is no unspecific version of the resource. If there is already an unspecific version of the resource it won't be overwritten.
 
+It's also possible to mark complete resource folders in the same way as single resource files in order to mark all the resource files within this folder as flavour specific. Example: Given the resource folder ```icons_CUSTOMER_B``` which contains the files ```001.png``` and ```002.png```. If the flavour _CUSTOMER_B_ is build, the images ```001.png``` and ```002.png``` will be copied to a resource folder ```ìcons``` and will be omitted if another flavour is build.
+
 ## Verification of critical terms
 
 A code base may contain critical terms like flavour specific company names, account numbers etc. In this case it must be ensured that the build artifacts of one flavour does not contain any critical terms of another flavour. E.g. if the flavour _CUSTOMER_A_ defines the critical term _A Ltd._ this term musts not be contained in the build artifacts of flavour _CUSTOMER_B_ and vice versa the critical term _B Ltd._ defined by flavour _CUSTOMER_B_ must not be contained in the build artifacts of the flavour _CUSTOMER_A_.

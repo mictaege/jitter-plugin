@@ -3,6 +3,7 @@ package com.github.mictaege.jitter.plugin
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.execution.TaskExecutionListener
+import org.gradle.api.file.FileTree
 import org.gradle.api.tasks.TaskState
 import org.gradle.language.jvm.tasks.ProcessResources
 
@@ -34,15 +35,14 @@ class ProcessResourcesListener implements TaskExecutionListener {
                     if (JitterUtil.active(f.name)) {
                         task.configure {
                             setDuplicatesStrategy(INCLUDE)
-                            filesMatching("**/*_${f.name}.*") {
-                                rename { String fileName ->
-                                    fileName.replace("_${f.name}", "")
-                                }
+                            eachFile {d ->
+                                d.path = d.path.replace("_${f.name}", "")
                             }
                         }
                     } else {
                         task.configure {
                             excludes.add("**/*_${f.name}.*")
+                            excludes.add("**/*_${f.name}")
                         }
                     }
                 }
@@ -53,7 +53,12 @@ class ProcessResourcesListener implements TaskExecutionListener {
 
     @Override
     void afterExecute(final Task task, final TaskState state) {
-        //NOP
+        FileTree tree = project.fileTree(project.buildDir)
+        tree.visit {f ->
+            if (f.isDirectory() && f.file.listFiles().size() == 0) {
+                f.file.delete()
+            }
+        }
     }
 
 }
