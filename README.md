@@ -377,19 +377,25 @@ public final class PersonValidator extends AbstractValidator<Person> implements 
 
 ## _jitter_ Resource Handling
 
+### Making resources flavour specific
+
 Any real-world application will not only contain Java source files, but also resources like property-, configuration- or other files and those resources my differ for each flavour of your application like the Java source files does.
 
 To make a resource file specific for a certain flavour with _jitter_ it's file name has to be suffixed with the name of the flavour. E.g. a specific version of ```Person.properties``` will have the name ```Person_CUSTOMER_B.properties```. Then _jitter_ forces Gradle to process such specific versions every time the tasks _processResources_ or _processTestResources_ are executed.
 
 It may be the case that there is an unspecific and one or more specific version of the resource - e.g. ```Person.properties``` _and_ ```Person_CUSTOMER_B.properties``` are existing - or it may be the case that only specific versions of the resource are existing - e.g. ```Person_CUSTOMER_A.properties```, ```Person_CUSTOMER_B.properties``` and/or ```Person_CUSTOMER_C.properties```.
 
-If a flavour is active - e.g. ```flavourCUSTOMER_B``` - the specific resources that are belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` -  will be renamed by removing the flavour prefix - e.g. renamed to ```Person.properties```. If an unspecific version of the resource - e.g. ```Person.properties``` - already exist this resource will be overwritten by the specific one.
+If a flavour is active - e.g. ```flavourCUSTOMER_B``` - the specific resources that are belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` -  will be renamed by removing the flavour postfix - e.g. renamed to ```Person.properties```. If an unspecific version of the resource - e.g. ```Person.properties``` - already exist this resource will be overwritten by the specific one.
 
 If another flavour is active ```flavourCUSTOMER_C```, all specific resources that are not belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` - will be omitted.
 
-If no flavour is active all specific resources - e.g. ```Person_CUSTOMER_B.properties``` - will be normalized by removing the flavour prefix - e.g. renamed to ```Person.properties``` - as long as there is no unspecific version of the resource. If there is already an unspecific version of the resource it won't be overwritten.
+If no flavour is active all specific resources - e.g. ```Person_CUSTOMER_B.properties``` - will be normalized by removing the flavour postfix - e.g. renamed to ```Person.properties``` - as long as there is no unspecific version of the resource. If there is already an unspecific version of the resource it won't be overwritten.
 
 It's also possible to mark complete resource folders in the same way as single resource files in order to mark all the resource files within this folder as flavour specific. Example: Given the resource folder ```icons_CUSTOMER_B``` which contains the files ```001.png``` and ```002.png```. If the flavour _CUSTOMER_B_ is build, the images ```001.png``` and ```002.png``` will be copied to a resource folder ```ìcons``` and will be omitted if another flavour is build.
+
+### Inverted flavour declaration
+
+It is also possible to declare a resource file or folder as flavour specific in an inverted way by using an ```!``` in front of the flavour postfix e.g.:  ```icons_!CUSTOMER_B```. In that case the files in ```icons_!CUSTOMER_B``` will be copied to a resource folder ```ìcons``` if the ```flavourCUSTOMER_B``` is **not** active.
 
 ## Verification of critical terms
 
