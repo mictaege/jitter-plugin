@@ -1,5 +1,5 @@
 group 'com.github.mictaege'
-version '2018.7'
+version '2018.8'
 
 apply plugin: 'groovy'
 apply plugin: 'java'
@@ -22,9 +22,9 @@ dependencies {
     compile gradleApi()
     compile 'com.google.guava:guava:23.0'
     compile 'org.codehaus.groovy:groovy-all:2.4.12'
-    compile 'com.github.mictaege:spoon-gradle-plugin:2018.1'
-    compile 'com.github.mictaege:jitter-api:2018.7'
-    compile 'org.eclipse.tycho:org.eclipse.jdt.core:3.13.50.v20171007-0855'
+    compile 'com.github.mictaege:spoon-gradle-plugin:2018.2'
+    compile 'com.github.mictaege:jitter-api:2018.8'
+    compile 'org.eclipse.jdt:org.eclipse.jdt.core:3.13.102'
     testCompile "junit:junit:4.12"
     testCompile "org.mockito:mockito-core:2.2.11"
 }
