@@ -21,11 +21,11 @@ class JitterPlugin implements Plugin<Project>  {
                     spoonExt.processors = [
                             'com.github.mictaege.jitter.plugin.AlterClassProcessor',
                             'com.github.mictaege.jitter.plugin.ForkMethodProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfPackageProcessor',
                             'com.github.mictaege.jitter.plugin.OnlyIfClassProcessor',
                             'com.github.mictaege.jitter.plugin.OnlyIfFieldProcessor',
                             'com.github.mictaege.jitter.plugin.OnlyIfMethodProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfConstructorProcessor'
+                            'com.github.mictaege.jitter.plugin.OnlyIfConstructorProcessor',
+                            'com.github.mictaege.jitter.plugin.OnlyIfPackageProcessor'
                     ]
                     spoonExt.compliance = project.jitter.compliance
                     spoonExt.exclude = project.jitter.excludeSrcSets
