@@ -23,7 +23,7 @@ dependencies {
     compile 'com.google.guava:guava:23.0'
     compile 'org.codehaus.groovy:groovy-all:2.4.12'
     compile 'com.github.mictaege:spoon-gradle-plugin:2019.1'
-    compile 'com.github.mictaege:jitter-api:2018.8'
+    compile 'com.github.mictaege:jitter-api:2019.1'
     compile 'org.eclipse.jdt:org.eclipse.jdt.core:3.16.0'
     testCompile "junit:junit:4.12"
     testCompile "org.mockito:mockito-core:2.2.11"
