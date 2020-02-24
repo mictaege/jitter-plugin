@@ -32,7 +32,7 @@ class JitterPlugin implements Plugin<Project>  {
                     spoonExt.fileFilter = { File srcFile ->
                         def pckInfo = new File(srcFile.parentFile, "package-info.java")
                         def pckInfoVar = pckInfo.exists() && pckInfo.text.contains("com.github.mictaege.jitter.api")
-                        pckInfoVar || srcFile.text.contains("com.github.mictaege.jitter.api")
+                        pckInfoVar || (srcFile.exists() && srcFile.text.contains("com.github.mictaege.jitter.api"))
                     }
                     spoonExt
                 }
