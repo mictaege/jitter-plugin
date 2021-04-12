@@ -1,5 +1,5 @@
 group 'com.github.mictaege'
-version '2020.1'
+version '2021.1'
 
 apply plugin: 'groovy'
 apply plugin: 'java'
@@ -10,7 +10,7 @@ apply plugin: 'signing'
 sourceCompatibility = 1.8
 
 wrapper {
-	gradleVersion = "5.4.1"
+	gradleVersion = "6.7"
 	distributionType = Wrapper.DistributionType.ALL
 }
 
@@ -23,9 +23,9 @@ dependencies {
     compile gradleApi()
     compile 'com.google.guava:guava:23.0'
     compile 'org.codehaus.groovy:groovy-all:2.5.8'
-    compile 'com.github.mictaege:spoon-gradle-plugin:2020.1'
-    compile 'com.github.mictaege:jitter-api:2020.1'
-    compile 'org.eclipse.jdt:org.eclipse.jdt.core:3.16.0'
+    compile 'com.github.mictaege:spoon-gradle-plugin:2021.1'
+    compile 'com.github.mictaege:jitter-api:2021.1'
+    compile 'org.eclipse.jdt:org.eclipse.jdt.core:3.25.0'
     testCompile "junit:junit:4.12"
     testCompile "org.mockito:mockito-core:2.2.11"
 }
