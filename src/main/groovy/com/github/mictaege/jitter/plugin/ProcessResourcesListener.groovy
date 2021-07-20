@@ -69,7 +69,7 @@ class ProcessResourcesListener implements TaskExecutionListener {
                     }
                 }
             }
-            project.fileTree(project.buildDir).visit { f ->
+            project.fileTree(task.destinationDir).visit { f ->
                 if (f.isDirectory() && f.file.listFiles().size() == 0) {
                     f.file.delete()
                 }
