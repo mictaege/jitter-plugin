@@ -1,5 +1,5 @@
 group 'com.github.mictaege'
-version '2021.4'
+version '2023.1-SNAPSHOT'
 
 apply plugin: 'groovy'
 apply plugin: 'java'
@@ -23,9 +23,9 @@ dependencies {
     compile gradleApi()
     compile 'com.google.guava:guava:23.0'
     compile 'org.codehaus.groovy:groovy-all:2.5.8'
-    compile 'com.github.mictaege:spoon-gradle-plugin:2021.4'
-    compile 'com.github.mictaege:jitter-api:2021.4'
-    compile 'org.eclipse.jdt:org.eclipse.jdt.core:3.25.0'
+    compile 'com.github.mictaege:spoon-gradle-plugin:2023.1-SNAPSHOT'
+    compile 'com.github.mictaege:jitter-api:2023.1-SNAPSHOT'
+    compile 'org.eclipse.jdt:org.eclipse.jdt.core:3.33.0'
     testCompile "junit:junit:4.12"
     testCompile "org.mockito:mockito-core:2.2.11"
 }
