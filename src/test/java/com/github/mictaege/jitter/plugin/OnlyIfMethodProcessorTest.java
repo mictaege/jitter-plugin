@@ -1,8 +1,10 @@
 package com.github.mictaege.jitter.plugin;
 
 import com.github.mictaege.jitter.api.OnlyIf;
-import org.junit.Before;
-import org.junit.Test;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import spoon.reflect.declaration.CtMethod;
 import spoon.reflect.declaration.CtType;
@@ -12,8 +14,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
+import static org.mockito.MockitoAnnotations.openMocks;
 
-public class OnlyIfMethodProcessorTest {
+class OnlyIfMethodProcessorTest {
 
     @Mock
     private OnlyIf annotation;
@@ -24,17 +27,24 @@ public class OnlyIfMethodProcessorTest {
 
     private OnlyIfMethodProcessor processor;
 
-    @Before
-    public void context() {
-        initMocks(this);
+    private AutoCloseable mocks;
+
+    @BeforeEach
+    void context() {
+        mocks = openMocks(this);
         when(annotation.value()).thenReturn(new String[]{"X"});
         when(type.getSimpleName()).thenReturn("AClass");
         when(method.getDeclaringType()).thenReturn(type);
         processor = new OnlyIfMethodProcessor();
     }
 
+    @AfterEach
+    void tearDown() throws Exception {
+        mocks.close();
+    }
+
     @Test
-    public void shouldDeleteIfNoMatchingFlavour() {
+    void shouldDeleteIfNoMatchingFlavour() {
         System.setProperty(FLAVOUR_PROP, "Y");
 
         processor.process(annotation, method);
@@ -43,7 +53,7 @@ public class OnlyIfMethodProcessorTest {
     }
 
     @Test
-    public void shouldNotDeleteIfMatchingFlavour() {
+    void shouldNotDeleteIfMatchingFlavour() {
         System.setProperty(FLAVOUR_PROP, "X");
 
         processor.process(annotation, method);

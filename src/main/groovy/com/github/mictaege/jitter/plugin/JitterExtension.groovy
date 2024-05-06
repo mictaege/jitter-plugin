@@ -11,7 +11,7 @@ class JitterExtension {
     List<FlavourCfg> flavours = new ArrayList<>()
 
     /** Java source code compliance level (1,2,3,4,5, 6, 7 or 8). (default: 8) */
-    int compliance = 8
+    int compliance = 11
 
     /** List of excluded source sets. */
     List<String> excludeSrcSets = new ArrayList<>()

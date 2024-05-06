@@ -1,14 +1,5 @@
 package com.github.mictaege.jitter.plugin;
 
-import com.github.mictaege.jitter.api.Fork;
-import org.junit.Before;
-import org.junit.Test;
-import org.mockito.Mock;
-import spoon.reflect.code.CtBlock;
-import spoon.reflect.code.CtStatement;
-import spoon.reflect.declaration.CtMethod;
-import spoon.reflect.declaration.CtType;
-
 import static com.github.mictaege.jitter.plugin.JitterUtil.FLAVOUR_PROP;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
@@ -17,8 +8,21 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
+import static org.mockito.MockitoAnnotations.openMocks;
 
-public class ForkMethodProcessorTest {
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mock;
+
+import com.github.mictaege.jitter.api.Fork;
+
+import spoon.reflect.code.CtBlock;
+import spoon.reflect.code.CtStatement;
+import spoon.reflect.declaration.CtMethod;
+import spoon.reflect.declaration.CtType;
+
+class ForkMethodProcessorTest {
 
     @Mock
     private Fork annotation;
@@ -33,9 +37,11 @@ public class ForkMethodProcessorTest {
 
     private ForkMethodProcessor processor;
 
-    @Before
-    public void context() {
-        initMocks(this);
+    private AutoCloseable mocks;
+
+    @BeforeEach
+    void context() {
+        mocks = openMocks(this);
         when(annotation.ifActive()).thenReturn("X");
         when(annotation.to()).thenReturn("bar");
         when(type.getSimpleName()).thenReturn("AClass");
@@ -45,8 +51,13 @@ public class ForkMethodProcessorTest {
         processor = new ForkMethodProcessor();
     }
 
+    @AfterEach
+    void tearDown() throws Exception {
+        mocks.close();
+    }
+
     @Test
-    public void shouldNotReplaceIfNoMatchingFlavour() {
+    void shouldNotReplaceIfNoMatchingFlavour() {
         System.setProperty(FLAVOUR_PROP, "Y");
 
         processor.process(annotation, method);
@@ -56,7 +67,7 @@ public class ForkMethodProcessorTest {
     }
 
     @Test
-    public void shouldReplaceIfMatchingFlavour() {
+    void shouldReplaceIfMatchingFlavour() {
         System.setProperty(FLAVOUR_PROP, "X");
 
         processor.process(annotation, method);
@@ -66,7 +77,7 @@ public class ForkMethodProcessorTest {
     }
 
     @Test
-    public void shouldSkipIfForkMethodIsMissing() {
+    void shouldSkipIfForkMethodIsMissing() {
         System.setProperty(FLAVOUR_PROP, "X");
         when(type.getMethodsByName("bar")).thenReturn(emptyList());
 
