@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "io.github.mictaege"
-version = "2024.1"
+version = "2024.2-rc2"
 
 gradlePlugin {
     website.set("https://github.com/mictaege/jitter-plugin")
@@ -34,9 +34,8 @@ repositories {
 
 dependencies {
     implementation(gradleApi())
-    //implementation("org.codehaus.groovy:groovy-all:3.0.17")
-    implementation("io.github.mictaege:spoon-gradle-plugin:2024.1")
-    implementation("io.github.mictaege:jitter-api:2024.1")
+    implementation("io.github.mictaege:spoon-gradle-plugin:2024.2-rc2")
+    implementation("io.github.mictaege:jitter-api:2024.2-rc2")
     implementation("com.google.guava:guava:33.2.0-jre")
     implementation("org.eclipse.jdt:org.eclipse.jdt.core:3.37.0")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.2")

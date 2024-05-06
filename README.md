@@ -92,23 +92,12 @@ dependencies {
 
 If this dependency is added the source code in the project could be marked up with the _jitter_ annotations like ```@OnlyIf```.
 
-To make the annotation processing and source code transformation happen you will also have to apply the _jitter-plugin_. Therefore you first have to add a _buildscript_ section like this:
+To make the annotation processing and source code transformation happen you will also have to apply the _jitter-plugin_.
 
 ```Groovy
-buildscript {
-    repositories {
-        mavenCentral()
-    }
-    dependencies {
-        classpath group: 'io.github.mictaege', name: 'jitter-plugin', version:'X.X'
-    }
+plugins {
+    id "io.github.mictaege.jitter-plugin" version "X.X"
 }
-```
-
-Then you can apply the _jitter-plugin_:
-
-```Groovy
-apply plugin: 'jitter'
 ```
 
 and finally you can configure the flavours of your application in a _jitter_ section:
