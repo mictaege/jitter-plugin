@@ -5,11 +5,14 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
+import static org.mockito.MockitoAnnotations.openMocks;
 import static spoon.reflect.declaration.ModifierKind.PUBLIC;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
 
 import com.github.mictaege.jitter.api.Alter;
 
@@ -18,7 +21,7 @@ import spoon.reflect.declaration.CtPackage;
 import spoon.reflect.declaration.CtType;
 import spoon.reflect.declaration.ModifierKind;
 
-public class AlterClassProcessorTest {
+class AlterClassProcessorTest {
 
     @Mock
     private Alter annotation;
@@ -33,9 +36,11 @@ public class AlterClassProcessorTest {
 
     private AlterClassProcessor processor;
 
-    @Before
-    public void context() {
-        initMocks(this);
+    private AutoCloseable mocks;
+
+    @BeforeEach
+    void context() {
+        mocks = openMocks(this);
         when(annotation.ifActive()).thenReturn("X");
         when(annotation.with()).thenReturn("Bar");
         when(clazz.getSimpleName()).thenReturn("AClass");
@@ -47,8 +52,13 @@ public class AlterClassProcessorTest {
         processor = new AlterClassProcessor();
     }
 
+    @AfterEach
+    void tearDown() throws Exception {
+        mocks.close();
+    }
+
     @Test
-    public void shouldNotAlterIfNoMatchingFlavour() {
+    void shouldNotAlterIfNoMatchingFlavour() {
         System.setProperty(FLAVOUR_PROP, "Y");
 
         processor.process(annotation, clazz);
@@ -59,7 +69,7 @@ public class AlterClassProcessorTest {
     }
 
     @Test
-    public void shouldAlterIfMatchingFlavour() {
+    void shouldAlterIfMatchingFlavour() {
         System.setProperty(FLAVOUR_PROP, "X");
 
         processor.process(annotation, clazz);
@@ -71,7 +81,7 @@ public class AlterClassProcessorTest {
     }
 
     @Test
-    public void shouldSkipIfAlterClassIsMissing() {
+    void shouldSkipIfAlterClassIsMissing() {
         System.setProperty(FLAVOUR_PROP, "X");
         when(pck.getType("Bar")).thenReturn(null);
 

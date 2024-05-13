@@ -1,7 +1,7 @@
 # jitter-plugin
 
 [![Apache License 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0.html)
-[![Maven Central](https://img.shields.io/maven-central/v/com.github.mictaege/jitter-plugin.svg)](http://search.maven.org/#search%7Cga%7C1%7Cg%3A%22com.github.mictaege%22%20AND%20a%3A%22jitter-plugin%22)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.mictaege/jitter-plugin.svg)](http://search.maven.org/#search%7Cga%7C1%7Cg%3A%22io.github.mictaege%22%20AND%20a%3A%22jitter-plugin%22)
 
 >The _jitter-plugin_ is a Gradle plugin to build and distribute different flavours of an application from a single source base.
 
@@ -85,30 +85,19 @@ The [jitter-api](https://github.com/mictaege/jitter-api) is added as any other d
 
 ```Groovy
 dependencies {
-    compile "com.github.mictaege:jitter-api:X.X"
+    compile "io.github.mictaege:jitter-api:X.X"
     //...
 }
 ``` 
 
 If this dependency is added the source code in the project could be marked up with the _jitter_ annotations like ```@OnlyIf```.
 
-To make the annotation processing and source code transformation happen you will also have to apply the _jitter-plugin_. Therefore you first have to add a _buildscript_ section like this:
+To make the annotation processing and source code transformation happen you will also have to apply the _jitter-plugin_.
 
 ```Groovy
-buildscript {
-    repositories {
-        mavenCentral()
-    }
-    dependencies {
-        classpath group: 'com.github.mictaege', name: 'jitter-plugin', version:'X.X'
-    }
+plugins {
+    id "io.github.mictaege.jitter-plugin" version "X.X"
 }
-```
-
-Then you can apply the _jitter-plugin_:
-
-```Groovy
-apply plugin: 'jitter'
 ```
 
 and finally you can configure the flavours of your application in a _jitter_ section:
