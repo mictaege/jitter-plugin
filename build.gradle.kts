@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "io.github.mictaege"
-version = "2024.3"
+version = "2025.1"
 
 gradlePlugin {
     website.set("https://github.com/mictaege/jitter-plugin")
@@ -34,14 +34,16 @@ repositories {
 
 dependencies {
     implementation(gradleApi())
-    implementation("io.github.mictaege:spoon-gradle-plugin:2024.3")
-    implementation("io.github.mictaege:jitter-api:2024.3")
-    implementation("com.google.guava:guava:33.2.0-jre")
-    implementation("org.eclipse.jdt:org.eclipse.jdt.core:3.37.0")
-    testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.2")
-    testImplementation("org.junit.jupiter:junit-jupiter-engine:5.10.2")
-    testImplementation("org.hamcrest:hamcrest:2.2")
-    testImplementation("org.mockito:mockito-core:5.11.0")
+    implementation("io.github.mictaege:spoon-gradle-plugin:2025.1")
+    implementation("io.github.mictaege:jitter-api:2025.1")
+    implementation("com.google.guava:guava:33.4.8-jre")
+    implementation("org.eclipse.jdt:org.eclipse.jdt.core:3.39.0")
+    testImplementation(platform("org.junit:junit-bom:5.12.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter-api")
+    testImplementation("org.junit.jupiter:junit-jupiter-engine")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.12.2")
+    testImplementation("org.hamcrest:hamcrest:3.0")
+    testImplementation("org.mockito:mockito-core:5.17.0")
 }
 
 tasks.register("generateResources") {
