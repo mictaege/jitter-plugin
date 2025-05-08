@@ -36,12 +36,12 @@ dependencies {
     implementation(gradleApi())
     implementation("io.github.mictaege:spoon-gradle-plugin:2024.3")
     implementation("io.github.mictaege:jitter-api:2024.3")
-    implementation("com.google.guava:guava:33.2.0-jre")
+    implementation("com.google.guava:guava:33.4.8-jre")
     implementation("org.eclipse.jdt:org.eclipse.jdt.core:3.39.0")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.2")
     testImplementation("org.junit.jupiter:junit-jupiter-engine:5.10.2")
-    testImplementation("org.hamcrest:hamcrest:2.2")
-    testImplementation("org.mockito:mockito-core:5.11.0")
+    testImplementation("org.hamcrest:hamcrest:3.0")
+    testImplementation("org.mockito:mockito-core:5.17.0")
 }
 
 tasks.register("generateResources") {
