@@ -2,7 +2,6 @@ package com.github.mictaege.jitter.plugin
 
 import groovy.transform.Canonical
 import org.gradle.api.Action
-import org.gradle.util.ConfigureUtil
 
 @Canonical
 class JitterExtension {
@@ -19,7 +18,7 @@ class JitterExtension {
     void flavour(Closure closure) {
         def instance = new FlavourCfg()
         flavours.add(instance)
-        ConfigureUtil.configure(closure, instance)
+        Closures.configure(closure, instance)
     }
 
     void flavour(Action<? super FlavourCfg> action) {
