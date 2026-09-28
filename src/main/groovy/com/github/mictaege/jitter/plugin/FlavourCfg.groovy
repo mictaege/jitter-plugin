@@ -2,7 +2,6 @@ package com.github.mictaege.jitter.plugin
 
 import groovy.transform.Canonical
 import org.gradle.api.Action
-import org.gradle.util.ConfigureUtil
 
 @Canonical
 class FlavourCfg {
@@ -10,7 +9,7 @@ class FlavourCfg {
     CriticalTermsCfg criticalTerms = new CriticalTermsCfg()
 
     void criticalTerms(Closure closure) {
-        ConfigureUtil.configure(closure, criticalTerms)
+        Closures.configure(closure, criticalTerms)
     }
 
     void criticalTerms(Action<? super CriticalTermsCfg> action) {
