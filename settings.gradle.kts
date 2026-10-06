@@ -1,3 +1,3 @@
 rootProject.name = "jitter-plugin"
-includeBuild("../jitter-api")
-includeBuild("../spoon-gradle-plugin")
+includeBuild("/home/mtaege/projects/jitter-api")
+includeBuild("/home/mtaege/projects/spoon-gradle-plugin")

@@ -1,8 +1,11 @@
 package com.github.mictaege.jitter.plugin
 
-import com.github.mictaege.spoon_gradle_plugin.SpoonExtension
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.bundling.Jar
+import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.api.tasks.testing.Test
 
 import java.util.regex.Pattern
 
@@ -14,36 +17,41 @@ class JitterPlugin implements Plugin<Project>  {
 
         project.configure(project) {
             apply plugin: 'java'
-            apply plugin: 'spoon'
-
-            project.spoon.lazyExtensions = { ->
-                    def spoonExt = new SpoonExtension()
-                    spoonExt.processors = [
-                            'com.github.mictaege.jitter.plugin.AlterClassProcessor',
-                            'com.github.mictaege.jitter.plugin.ForkMethodProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfClassProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfFieldProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfMethodProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfConstructorProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfPackageProcessor'
-                    ]
-                    spoonExt.compliance = project.jitter.compliance
-                    spoonExt.exclude = project.jitter.excludeSrcSets
-                    spoonExt.fileFilter = { File srcFile ->
-                        def pckInfo = new File(srcFile.parentFile, "package-info.java")
-                        def pckInfoVar = pckInfo.exists() && pckInfo.text.contains("com.github.mictaege.jitter.api")
-                        pckInfoVar || (srcFile.exists() && srcFile.text.contains("com.github.mictaege.jitter.api"))
-                    }
-                    spoonExt
-                }
-
         }
 
-        project.afterEvaluate({
+        project.afterEvaluate({ ->
             project.jitter.flavours.each {f ->
                 project.task("flavour${f.name}", type: JitterTask) {
                     flavour = f
                 }
+            }
+        })
+
+        project.afterEvaluate({ ->
+            def stripTasks = []
+            def allClassesDirs = [] as Set
+
+            project.sourceSets.all { srcSet ->
+                allClassesDirs.addAll(srcSet.output.classesDirs.files)
+
+                if (!project.jitter.excludeSrcSets.contains(srcSet.name)) {
+                    def stripTask = project.task("jitterStrip${srcSet.name.capitalize()}", type: JitterStripTask)
+                    stripTask.classesDirs = srcSet.output.classesDirs.files
+                    stripTask.dependsOn srcSet.compileJavaTaskName
+                    stripTask.mustRunAfter project.tasks.withType(JavaCompile)
+                    stripTasks << stripTask
+                }
+            }
+
+            if (!stripTasks.isEmpty()) {
+                def verifyTask = project.task("jitterVerify", type: JitterVerifyTask)
+                verifyTask.stripTasks = stripTasks
+                verifyTask.allClassesDirs = allClassesDirs
+                verifyTask.dependsOn stripTasks
+
+                project.tasks.withType(Test).configureEach { it.dependsOn verifyTask }
+                project.tasks.withType(JavaExec).configureEach { it.dependsOn verifyTask }
+                project.tasks.withType(Jar).configureEach { it.dependsOn verifyTask }
             }
         })
 

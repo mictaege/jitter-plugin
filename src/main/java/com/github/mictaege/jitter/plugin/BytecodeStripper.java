@@ -1,0 +1,790 @@
+package com.github.mictaege.jitter.plugin;
+
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
+import org.objectweb.asm.commons.ClassRemapper;
+import org.objectweb.asm.commons.Remapper;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.AnnotationNode;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.FieldNode;
+import org.objectweb.asm.tree.FrameNode;
+import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.IntInsnNode;
+import org.objectweb.asm.tree.LabelNode;
+import org.objectweb.asm.tree.LdcInsnNode;
+import org.objectweb.asm.tree.LineNumberNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TypeInsnNode;
+
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+
+import static com.github.mictaege.jitter.plugin.JitterUtil.active;
+import static com.github.mictaege.jitter.plugin.JitterUtil.anyFlavour;
+import static com.github.mictaege.jitter.plugin.JitterUtil.log;
+
+/**
+ * Strips the 150% model from compiled classes of one source set output
+ * directory, so that only the members of the currently active flavour
+ * survive.
+ *
+ * The stripping works purely on the class files. The sources and their
+ * compilation are not touched, the line number tables of the surviving
+ * code are kept unchanged. The operations correspond to the semantic of
+ * the jitter annotations:
+ *
+ * - {@code @OnlyIf}: remove class, package, field, constructor or method
+ *   if none of the given flavours is active.
+ * - {@code @Fork}: replace the body of the annotated method with the body
+ *   of the referenced template method and remove the template.
+ * - {@code @Alter}: replace the annotated class with the referenced template
+ *   class and remove the template.
+ *
+ * In addition the jitter annotations are removed from the surviving
+ * bytecode.
+ */
+public final class BytecodeStripper {
+
+    private static final String ONLY_IF = "Lcom/github/mictaege/jitter/api/OnlyIf;";
+    private static final String FORK = "Lcom/github/mictaege/jitter/api/Fork;";
+    private static final String GATEWAY = "Lcom/github/mictaege/jitter/api/Gateway;";
+    private static final String ALTER = "Lcom/github/mictaege/jitter/api/Alter;";
+    private static final String ALTERNATIVES = "Lcom/github/mictaege/jitter/api/Alternatives;";
+    private static final List<String> JITTER_ANNOTATIONS = Arrays.asList(
+            ONLY_IF, FORK, GATEWAY, ALTER, ALTERNATIVES);
+
+    private static final String PACKAGE_INFO = "/package-info";
+
+    /**
+     * Strips all class files of the given directory (in place) and
+     * reports what has been removed.
+     */
+    public StripResult strip(final Path classesDir) throws IOException {
+        final StripResult result = new StripResult();
+        final Map<String, ClassNode> nodes = new HashMap<>();
+        final Map<String, Path> paths = new HashMap<>();
+        final Set<String> dirty = new HashSet<>();
+
+        loadClasses(classesDir, nodes, paths);
+
+        removePackages(nodes, result, dirty);
+        applyAltclasses(nodes, result, dirty);
+        applyForkMethods(nodes, result, dirty);
+        rewriteEnums(nodes, result, dirty);
+        removeOnlyIf(nodes, result, dirty);
+        removeFieldInitializers(nodes, result, dirty);
+        cleanAnnotations(nodes, dirty);
+
+        writeBack(classesDir, nodes, paths, dirty, result);
+        return result;
+    }
+
+    private void loadClasses(final Path classesDir, final Map<String, ClassNode> nodes,
+                             final Map<String, Path> paths) throws IOException {
+        if (!Files.isDirectory(classesDir)) {
+            return;
+        }
+        Files.walkFileTree(classesDir, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(final Path file, final BasicFileAttributes attrs) {
+                final String name = file.getFileName().toString();
+                if (name.endsWith(".class")) {
+                    final String internalName = toInternalName(classesDir, file);
+                    try {
+                        final ClassNode node = new ClassNode();
+                        new ClassReader(Files.readAllBytes(file)).accept(node, 0);
+                        nodes.put(internalName, node);
+                        paths.put(internalName, file);
+                    } catch (final IOException e) {
+                        log().error("Could not read class file " + file + ": " + e.getMessage());
+                    }
+                }
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    private String toInternalName(final Path classesDir, final Path file) {
+        final Path relative = classesDir.relativize(file);
+        final String slashed = relative.toString().replace(java.io.File.separatorChar, '/');
+        return slashed.substring(0, slashed.length() - ".class".length());
+    }
+
+    private void removePackages(final Map<String, ClassNode> nodes, final StripResult result,
+                                final Set<String> dirty) {
+        final List<String> removedPrefixes = new ArrayList<>();
+        for (final ClassNode node : nodes.values()) {
+            if (node.name.endsWith(PACKAGE_INFO)) {
+                final List<String> flavours = onlyIfFlavours(node);
+                if (flavours != null && flavours.stream().noneMatch(JitterUtil::active)) {
+                    final String prefix = node.name.substring(0, node.name.length() - PACKAGE_INFO.length()) + "/";
+                    removedPrefixes.add(prefix);
+                    result.info("Remove package " + prefix.replace('/', '.'));
+                }
+            }
+        }
+        if (!removedPrefixes.isEmpty()) {
+            final Set<String> removed = new TreeSet<>();
+            nodes.keySet().removeIf(name -> {
+                if (removedPrefixes.stream().anyMatch(name::startsWith)) {
+                    removed.add(name);
+                    return true;
+                }
+                return false;
+            });
+            removed.forEach(result::removedClass);
+            removed.forEach(name -> dirty.add(name));
+        }
+    }
+
+    private void applyAltclasses(final Map<String, ClassNode> nodes, final StripResult result,
+                                 final Set<String> dirty) {
+        for (final ClassNode target : new ArrayList<>(nodes.values())) {
+            final AnnotationNode matching = matchingAnnotation(target.visibleAnnotations, ALTER, ALTERNATIVES, "with");
+            if (matching == null) {
+                continue;
+            }
+            final String with = annotationValue(matching, "with");
+            final String templateName = with.contains(".")
+                    ? with.replace('.', '/')
+                    : packageOf(target.name) + with;
+            final ClassNode template = nodes.get(templateName);
+            if (template == null) {
+                result.error("The given alternative class " + with + " could not be found");
+                continue;
+            }
+            final ClassNode renamed = remap(template, templateName, target.name);
+            if ((target.access & Opcodes.ACC_PUBLIC) != 0) {
+                renamed.access |= Opcodes.ACC_PUBLIC;
+            } else {
+                renamed.access &= ~Opcodes.ACC_PUBLIC;
+            }
+            nodes.remove(templateName);
+            nodes.put(target.name, renamed);
+            result.removedClass(templateName);
+            result.info("Replace class " + target.name.replace('/', '.')
+                    + " with " + with + ". Removed template " + templateName.replace('/', '.'));
+            dirty.add(target.name);
+        }
+    }
+
+    private void applyForkMethods(final Map<String, ClassNode> nodes, final StripResult result,
+                                  final Set<String> dirty) {
+        for (final ClassNode node : nodes.values()) {
+            for (final MethodNode method : new ArrayList<>(node.methods)) {
+                final AnnotationNode matching = matchingAnnotation(method.visibleAnnotations, FORK, GATEWAY, "to");
+                if (matching == null) {
+                    continue;
+                }
+                final String altName = annotationValue(matching, "to");
+                final MethodNode alt = node.methods.stream()
+                        .filter(m -> m != method && m.name.equals(altName))
+                        .findFirst().orElse(null);
+                if (alt == null) {
+                    result.error("The given alternative method " + altName + " could not be found in "
+                            + node.name.replace('/', '.'));
+                    continue;
+                }
+                method.instructions = alt.instructions;
+                method.tryCatchBlocks = alt.tryCatchBlocks;
+                method.localVariables = alt.localVariables;
+                method.visibleLocalVariableAnnotations = alt.visibleLocalVariableAnnotations;
+                method.invisibleLocalVariableAnnotations = alt.invisibleLocalVariableAnnotations;
+                method.maxStack = alt.maxStack;
+                method.maxLocals = alt.maxLocals;
+                method.exceptions.clear();
+                method.exceptions.addAll(alt.exceptions);
+                node.methods.remove(alt);
+                result.removedMember(memberKey(node.name, alt.name, alt.desc));
+                result.info("Replace method " + node.name.replace('/', '.') + "#" + method.name
+                        + " with #" + altName + ". Removed template method " + altName);
+                dirty.add(node.name);
+            }
+        }
+    }
+
+    /**
+     * Removing enum constants needs a rewrite of the enums static
+     * initializer: the constructor invocations of the removed constants
+     * as well as the synthetic values array have to disappear, and the
+     * ordinals of the surviving constants have to be renumbered, as the
+     * compiler would do it when the enum is compiled without the removed
+     * constants.
+     */
+    private void rewriteEnums(final Map<String, ClassNode> nodes, final StripResult result,
+                              final Set<String> dirty) {
+        for (final ClassNode node : new ArrayList<>(nodes.values())) {
+            if ((node.access & Opcodes.ACC_ENUM) == 0) {
+                continue;
+            }
+            final List<String> survivors = new ArrayList<>();
+            final List<String> removed = new ArrayList<>();
+            for (final FieldNode field : node.fields) {
+                if ((field.access & Opcodes.ACC_ENUM) == 0
+                        || (field.access & Opcodes.ACC_STATIC) == 0) {
+                    continue;
+                }
+                if (isInactive(field.visibleAnnotations)) {
+                    removed.add(field.name);
+                } else {
+                    survivors.add(field.name);
+                }
+            }
+            if (removed.isEmpty()) {
+                continue;
+            }
+
+            final MethodNode clinit = node.methods.stream()
+                    .filter(m -> m.name.equals("<clinit>"))
+                    .findFirst().orElse(null);
+            if (clinit != null) {
+                removeConstantBlocks(clinit, node.name, removed);
+                renumberOrdinals(clinit, node.name, survivors);
+            }
+
+            final MethodNode valuesHelper = node.methods.stream()
+                    .filter(m -> m.name.equals("$values"))
+                    .findFirst().orElse(null);
+            if (valuesHelper != null) {
+                rebuildValuesArray(valuesHelper.instructions, node.name, survivors, true);
+                valuesHelper.maxStack = Math.max(4, valuesHelper.maxStack);
+            } else if (clinit != null) {
+                rebuildValuesInClinit(clinit, node.name, survivors);
+            }
+
+            result.info("Remove enum constants " + removed + " of " + node.name.replace('/', '.')
+                    + ". Renumber ordinals of " + survivors);
+            dirty.add(node.name);
+        }
+    }
+
+    private void removeConstantBlocks(final MethodNode clinit, final String owner,
+                                      final List<String> removed) {
+        final List<AbstractInsnNode> insns = new ArrayList<>();
+        clinit.instructions.forEach(insns::add);
+        int i = 0;
+        while (i < insns.size()) {
+            final AbstractInsnNode insn = insns.get(i);
+            if (!(insn instanceof TypeInsnNode) || insn.getOpcode() != Opcodes.NEW
+                    || !((TypeInsnNode) insn).desc.equals(owner)) {
+                i++;
+                continue;
+            }
+            int depth = 1;
+            int j = i + 1;
+            while (j < insns.size() && depth > 0) {
+                final AbstractInsnNode current = insns.get(j);
+                if (current.getOpcode() == Opcodes.NEW) {
+                    depth++;
+                } else if (current.getOpcode() == Opcodes.INVOKESPECIAL) {
+                    depth--;
+                }
+                j++;
+            }
+            if (j >= insns.size()) {
+                break;
+            }
+            final AbstractInsnNode put = insns.get(j);
+            if (put instanceof FieldInsnNode && put.getOpcode() == Opcodes.PUTSTATIC
+                    && removed.contains(((FieldInsnNode) put).name)) {
+                final List<AbstractInsnNode> block = insns.subList(i, j + 1);
+                block.forEach(clinit.instructions::remove);
+                block.clear();
+            } else {
+                i = j;
+            }
+        }
+    }
+
+    private void renumberOrdinals(final MethodNode clinit, final String owner,
+                                  final List<String> survivors) {
+        final List<AbstractInsnNode> insns = new ArrayList<>();
+        clinit.instructions.forEach(insns::add);
+        int newOrdinal = 0;
+        for (int i = 0; i < insns.size(); i++) {
+            final AbstractInsnNode insn = insns.get(i);
+            if (!(insn instanceof TypeInsnNode) || insn.getOpcode() != Opcodes.NEW
+                    || !((TypeInsnNode) insn).desc.equals(owner)) {
+                continue;
+            }
+            if (i + 3 < insns.size()
+                    && insns.get(i + 2) instanceof LdcInsnNode
+                    && ((LdcInsnNode) insns.get(i + 2)).cst instanceof String
+                    && survivors.contains((String) ((LdcInsnNode) insns.get(i + 2)).cst)
+                    && isIntPush(insns.get(i + 3))) {
+                clinit.instructions.set(insns.get(i + 3), pushInt(newOrdinal));
+                newOrdinal++;
+            }
+        }
+    }
+
+    private boolean isIntPush(final AbstractInsnNode insn) {
+        final int opcode = insn.getOpcode();
+        return (opcode >= Opcodes.ICONST_0 && opcode <= Opcodes.ICONST_5)
+                || opcode == Opcodes.BIPUSH
+                || opcode == Opcodes.SIPUSH
+                || opcode == Opcodes.LDC;
+    }
+
+    private void rebuildValuesInClinit(final MethodNode clinit, final String owner,
+                                      final List<String> survivors) {
+        final List<AbstractInsnNode> insns = new ArrayList<>();
+        clinit.instructions.forEach(insns::add);
+        int start = -1;
+        int end = -1;
+        for (int i = 0; i < insns.size(); i++) {
+            final AbstractInsnNode insn = insns.get(i);
+            if (insn instanceof TypeInsnNode && insn.getOpcode() == Opcodes.ANEWARRAY
+                    && ((TypeInsnNode) insn).desc.equals(owner)) {
+                start = i;
+            }
+            if (start >= 0 && insn instanceof FieldInsnNode && insn.getOpcode() == Opcodes.PUTSTATIC
+                    && ((FieldInsnNode) insn).name.equals("$VALUES")) {
+                end = i;
+                break;
+            }
+        }
+        if (start < 0 || end < 0 || end <= start) {
+            return;
+        }
+        for (int k = start; k <= end; k++) {
+            clinit.instructions.remove(insns.get(k));
+        }
+        final InsnList fresh = new InsnList();
+        fresh.add(pushInt(survivors.size()));
+        fresh.add(new TypeInsnNode(Opcodes.ANEWARRAY, owner));
+        appendConstantStores(fresh, owner, survivors);
+        fresh.add(new FieldInsnNode(Opcodes.PUTSTATIC, owner, "$VALUES", "[L" + owner + ";"));
+        clinit.instructions.insert(fresh);
+        clinit.maxStack = Math.max(4, clinit.maxStack);
+    }
+
+    private void rebuildValuesArray(final InsnList instructions, final String owner,
+                                    final List<String> survivors, final boolean returnArray) {
+        instructions.clear();
+        final InsnList fresh = new InsnList();
+        fresh.add(pushInt(survivors.size()));
+        fresh.add(new TypeInsnNode(Opcodes.ANEWARRAY, owner));
+        appendConstantStores(fresh, owner, survivors);
+        if (returnArray) {
+            fresh.add(new InsnNode(Opcodes.ARETURN));
+        }
+        instructions.add(fresh);
+    }
+
+    private void appendConstantStores(final InsnList fresh, final String owner,
+                                      final List<String> survivors) {
+        int index = 0;
+        for (final String constant : survivors) {
+            fresh.add(new InsnNode(Opcodes.DUP));
+            fresh.add(pushInt(index));
+            fresh.add(new FieldInsnNode(Opcodes.GETSTATIC, owner, constant, "L" + owner + ";"));
+            fresh.add(new InsnNode(Opcodes.AASTORE));
+            index++;
+        }
+    }
+
+    private AbstractInsnNode pushInt(final int value) {
+        if (value >= 0 && value <= 5) {
+            return new InsnNode(Opcodes.ICONST_0 + value);
+        }
+        if (value >= Byte.MIN_VALUE && value <= Byte.MAX_VALUE) {
+            return new IntInsnNode(Opcodes.BIPUSH, value);
+        }
+        if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
+            return new IntInsnNode(Opcodes.SIPUSH, value);
+        }
+        return new LdcInsnNode(value);
+    }
+
+    private void removeOnlyIf(final Map<String, ClassNode> nodes, final StripResult result,
+                              final Set<String> dirty) {
+        for (final ClassNode node : new ArrayList<>(nodes.values())) {
+            final List<String> flavours = onlyIfFlavours(node);
+            if (flavours != null && flavours.stream().noneMatch(JitterUtil::active)) {
+                nodes.remove(node.name);
+                result.removedClass(node.name);
+                result.info("Remove class " + node.name.replace('/', '.'));
+                log().info("Remove class " + node.name.replace('/', '.'));
+                dirty.add(node.name);
+                continue;
+            }
+            node.fields.removeIf(field -> {
+                if (isInactive(field.visibleAnnotations)) {
+                    result.removedMember(memberKey(node.name, field.name, field.desc));
+                    result.removedField(node.name, field.name, field.desc,
+                            (field.access & Opcodes.ACC_STATIC) != 0);
+                    result.info("Remove field " + node.name.replace('/', '.') + "#" + field.name);
+                    dirty.add(node.name);
+                    return true;
+                }
+                return false;
+            });
+            final List<String> lambdaPrefixes = new ArrayList<>();
+            node.methods.removeIf(method -> {
+                if (isInactive(method.visibleAnnotations)) {
+                    result.removedMember(memberKey(node.name, method.name, method.desc));
+                    result.info("Remove method " + node.name.replace('/', '.') + "#" + method.name);
+                    lambdaPrefixes.add("lambda$" + method.name + "$");
+                    dirty.add(node.name);
+                    return true;
+                }
+                return false;
+            });
+            if (!lambdaPrefixes.isEmpty()) {
+                node.methods.removeIf(method -> {
+                    for (final String prefix : lambdaPrefixes) {
+                        if (method.name.startsWith(prefix)) {
+                            result.removedMember(memberKey(node.name, method.name, method.desc));
+                            result.info("Remove lambda " + node.name.replace('/', '.') + "#" + method.name);
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+            }
+        }
+    }
+
+    /**
+     * Removing a field with an inline initializer leaves the initializer
+     * store behind in the constructor resp. the static initializer. The
+     * store including the instructions that produce the value has to be
+     * removed as well, as the source transformation would do implicitly.
+     */
+    private void removeFieldInitializers(final Map<String, ClassNode> nodes, final StripResult result,
+                                         final Set<String> dirty) {
+        for (final String key : result.getRemovedFields()) {
+            final String[] parts = key.split("\\|");
+            final String owner = parts[0];
+            final String fieldName = parts[1];
+            final String fieldDesc = parts[2];
+            final boolean isStatic = "S".equals(parts[3]);
+
+            final ClassNode node = nodes.get(owner);
+            if (node == null) {
+                continue;
+            }
+            for (final MethodNode method : new ArrayList<>(node.methods)) {
+                final boolean initializerHost = isStatic
+                        ? method.name.equals("<clinit>")
+                        : method.name.equals("<init>");
+                if (!initializerHost) {
+                    continue;
+                }
+                removeInitializerStores(method, owner, fieldName, fieldDesc, result, dirty);
+            }
+        }
+    }
+
+    private void removeInitializerStores(final MethodNode method, final String owner,
+                                         final String fieldName, final String fieldDesc,
+                                         final StripResult result, final Set<String> dirty) {
+        final List<AbstractInsnNode> insns = new ArrayList<>();
+        method.instructions.forEach(insns::add);
+        int t = 0;
+        while (t < insns.size()) {
+            final AbstractInsnNode insn = insns.get(t);
+            t++;
+            if (!(insn instanceof FieldInsnNode)) {
+                continue;
+            }
+            final FieldInsnNode field = (FieldInsnNode) insn;
+            final boolean put = field.getOpcode() == Opcodes.PUTFIELD
+                    || field.getOpcode() == Opcodes.PUTSTATIC;
+            if (!put || !field.owner.equals(owner) || !field.name.equals(fieldName)
+                    || !field.desc.equals(fieldDesc)) {
+                continue;
+            }
+            final int slots = field.getOpcode() == Opcodes.PUTFIELD ? 2 : 1;
+            final int start = findValueStart(insns, t - 1, slots);
+            if (start < 0) {
+                result.info("Could not remove the initializer of " + owner.replace('/', '.')
+                        + "#" + fieldName + " automatically");
+                continue;
+            }
+            final List<AbstractInsnNode> block = insns.subList(start, t);
+            block.forEach(method.instructions::remove);
+            block.clear();
+            t = start;
+            dirty.add(owner);
+        }
+    }
+
+    /**
+     * Walks backward from a store instruction and returns the index of the
+     * first instruction that produces the stored value. Returns -1 if the
+     * producing sequence is too complex to be detected reliably.
+     */
+    private int findValueStart(final List<AbstractInsnNode> insns, final int storeIndex,
+                               final int slots) {
+        int unresolved = slots;
+        for (int i = storeIndex - 1; i >= 0; i--) {
+            final AbstractInsnNode insn = insns.get(i);
+            final int[] effect = stackEffect(insn);
+            if (effect == null) {
+                return -1;
+            }
+            final int pops = effect[0];
+            final int pushes = effect[1];
+            if (pushes >= unresolved && pops == 0) {
+                return i;
+            }
+            unresolved = unresolved - pushes + pops;
+            if (unresolved <= 0) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Stack effect (pops, pushes) of an instruction, or null if the
+     * instruction cannot be handled safely, e.g. branches or labels.
+     */
+    private int[] stackEffect(final AbstractInsnNode insn) {
+        final int opcode = insn.getOpcode();
+        if (opcode < 0) {
+            if (insn instanceof LineNumberNode || insn instanceof FrameNode) {
+                return new int[]{0, 0};
+            }
+            return null;
+        }
+        if (insn instanceof LabelNode) {
+            return null;
+        }
+        if (opcode >= Opcodes.ICONST_0 && opcode <= Opcodes.DCONST_1) {
+            return new int[]{0, wide(opcode)};
+        }
+        if (insn instanceof LdcInsnNode) {
+            final Object cst = ((LdcInsnNode) insn).cst;
+            final boolean wide = cst instanceof Long || cst instanceof Double;
+            return new int[]{0, wide ? 2 : 1};
+        }
+        if (opcode >= Opcodes.ILOAD && opcode <= Opcodes.ALOAD) {
+            return new int[]{0, 1};
+        }
+        if (opcode == Opcodes.LLOAD || opcode == Opcodes.DLOAD) {
+            return new int[]{0, 2};
+        }
+        if (opcode == Opcodes.GETSTATIC) {
+            return new int[]{0, Type.getType(((FieldInsnNode) insn).desc).getSize()};
+        }
+        if (opcode == Opcodes.GETFIELD) {
+            return new int[]{1, Type.getType(((FieldInsnNode) insn).desc).getSize()};
+        }
+        if (opcode == Opcodes.NEW || opcode == Opcodes.DUP) {
+            return new int[]{0, 1};
+        }
+        if (opcode == Opcodes.CHECKCAST || opcode == Opcodes.INSTANCEOF) {
+            return new int[]{1, 1};
+        }
+        if (insn instanceof MethodInsnNode) {
+            final MethodInsnNode call = (MethodInsnNode) insn;
+            final int args = Type.getArgumentTypes(call.desc).length;
+            final int ret = Type.getReturnType(call.desc).getSize();
+            final int receiver = opcode == Opcodes.INVOKESTATIC ? 0 : 1;
+            return new int[]{args + receiver, ret};
+        }
+        return null;
+    }
+
+    private int wide(final int opcode) {
+        return opcode == Opcodes.LCONST_0 || opcode == Opcodes.LCONST_1
+                || opcode == Opcodes.DCONST_0 || opcode == Opcodes.DCONST_1 ? 2 : 1;
+    }
+
+    private void cleanAnnotations(final Map<String, ClassNode> nodes, final Set<String> dirty) {
+        for (final ClassNode node : nodes.values()) {
+            boolean changed = removeJitterAnnotations(node.visibleAnnotations);
+            for (final FieldNode field : node.fields) {
+                changed |= removeJitterAnnotations(field.visibleAnnotations);
+            }
+            for (final MethodNode method : node.methods) {
+                changed |= removeJitterAnnotations(method.visibleAnnotations);
+            }
+            if (changed) {
+                dirty.add(node.name);
+            }
+        }
+    }
+
+    private void writeBack(final Path classesDir, final Map<String, ClassNode> nodes,
+                           final Map<String, Path> paths, final Set<String> dirty,
+                           final StripResult result) throws IOException {
+        for (final String removed : result.getRemovedClasses()) {
+            final Path file = paths.get(removed);
+            if (file != null) {
+                Files.deleteIfExists(file);
+                deleteEmptyParents(classesDir, file.getParent());
+            }
+        }
+        for (final String name : dirty) {
+            final ClassNode node = nodes.get(name);
+            if (node == null) {
+                continue;
+            }
+            final ClassWriter writer = new ClassWriter(0);
+            node.accept(writer);
+            final Path file = paths.containsKey(name)
+                    ? paths.get(name)
+                    : classesDir.resolve(name.replace('/', java.io.File.separatorChar) + ".class");
+            Files.createDirectories(file.getParent());
+            Files.write(file, writer.toByteArray());
+        }
+        result.getInfos().forEach(msg -> log().info(msg));
+    }
+
+    private void deleteEmptyParents(final Path root, Path dir) throws IOException {
+        dir = dir.normalize();
+        while (dir != null && dir.startsWith(root) && !dir.equals(root)) {
+            try (java.util.stream.Stream<Path> content = Files.list(dir)) {
+                if (content.findAny().isPresent()) {
+                    break;
+                }
+            }
+            Files.delete(dir);
+            dir = dir.getParent();
+        }
+    }
+
+    private ClassNode remap(final ClassNode template, final String from, final String to) {        final Remapper remapper = new Remapper() {
+            @Override
+            public String map(final String internalName) {
+                return internalName.equals(from) ? to : internalName;
+            }
+        };
+        final ClassNode renamed = new ClassNode();
+        template.accept(new ClassRemapper(renamed, remapper));
+        return renamed;
+    }
+
+    private List<String> onlyIfFlavours(final ClassNode node) {
+        return onlyIfFlavours(node.visibleAnnotations);
+    }
+
+    private List<String> onlyIfFlavours(final List<AnnotationNode> annotations) {
+        if (annotations == null) {
+            return null;
+        }
+        for (final AnnotationNode annotation : annotations) {
+            if (ONLY_IF.equals(annotation.desc)) {
+                return annotationValues(annotation, "value");
+            }
+        }
+        return null;
+    }
+
+    private boolean isInactive(final List<AnnotationNode> annotations) {
+        final List<String> flavours = onlyIfFlavours(annotations);
+        return flavours != null && flavours.stream().noneMatch(JitterUtil::active);
+    }
+
+    private AnnotationNode matchingAnnotation(final List<AnnotationNode> annotations,
+                                              final String desc, final String containerDesc,
+                                              final String expectedValue) {
+        if (annotations == null) {
+            return null;
+        }
+        for (final AnnotationNode annotation : repeatableAnnotations(annotations, desc, containerDesc)) {
+            final String flavour = annotationValue(annotation, "ifActive");
+            if (flavour != null && anyFlavour() && active(flavour)) {
+                final String with = annotationValue(annotation, expectedValue);
+                if (with != null) {
+                    return annotation;
+                }
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<AnnotationNode> repeatableAnnotations(final List<AnnotationNode> annotations,
+                                                       final String desc, final String containerDesc) {
+        final List<AnnotationNode> result = new ArrayList<>();
+        for (final AnnotationNode annotation : annotations) {
+            if (desc.equals(annotation.desc)) {
+                result.add(annotation);
+            } else if (containerDesc.equals(annotation.desc)) {
+                final Object value = annotationRawValue(annotation, "value");
+                if (value instanceof List) {
+                    result.addAll((List<AnnotationNode>) value);
+                }
+            }
+        }
+        return result;
+    }
+
+    private String annotationValue(final AnnotationNode annotation, final String name) {
+        final Object value = annotationRawValue(annotation, name);
+        return value instanceof String ? (String) value : null;
+    }
+
+    private Object annotationRawValue(final AnnotationNode annotation, final String name) {
+        if (annotation.values == null) {
+            return null;
+        }
+        for (int i = 0; i < annotation.values.size(); i += 2) {
+            if (name.equals(annotation.values.get(i))) {
+                return annotation.values.get(i + 1);
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> annotationValues(final AnnotationNode annotation, final String name) {
+        if (annotation.values == null) {
+            return new ArrayList<>();
+        }
+        for (int i = 0; i < annotation.values.size(); i += 2) {
+            if (name.equals(annotation.values.get(i))) {
+                final Object value = annotation.values.get(i + 1);
+                if (value instanceof List) {
+                    return new ArrayList<>((List<String>) value);
+                }
+                if (value instanceof String) {
+                    final List<String> single = new ArrayList<>();
+                    single.add((String) value);
+                    return single;
+                }
+            }
+        }
+        return new ArrayList<>();
+    }
+
+    private boolean removeJitterAnnotations(final List<AnnotationNode> annotations) {
+        if (annotations == null) {
+            return false;
+        }
+        return annotations.removeIf(annotation -> JITTER_ANNOTATIONS.contains(annotation.desc));
+    }
+
+    private String packageOf(final String internalName) {
+        final int idx = internalName.lastIndexOf('/');
+        return idx < 0 ? "" : internalName.substring(0, idx + 1);
+    }
+
+    private String memberKey(final String owner, final String name, final String desc) {
+        return owner + "." + name + desc;
+    }
+
+}
