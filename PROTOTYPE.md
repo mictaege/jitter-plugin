@@ -92,6 +92,9 @@ Bytecode stripping couples only to the class file format (works across Java
 
 ## Test against a large code base (ologis, 2026-10)
 
+**Rule: never commit anything in the ologis repository.** All wiring for the
+bytecode-stripping test stays as uncommitted working-tree state.
+
 ologis: ~15.5k Java files, 20 modules, mixed Kotlin/Java, Gradle 9.8.0,
 jitter annotations in 2,785 files (6.9k `@OnlyIf`, 1.5k `@Fork`, 18 `@Alter`),
 3 flavours. The plugin was substituted into the consumer build via
