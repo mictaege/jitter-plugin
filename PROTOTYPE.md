@@ -183,6 +183,57 @@ already-stripped upstream jar.
    nothing. Consumers need to retarget the includes (e.g. at the class files)
    or the plugin needs a bytecode-scanning mode.
 
+### Full-model measurement (2026-10-07): making the ologis 150% model self-compilable
+
+To size the source migration for the full-model-compile-artifact design,
+stripping was disabled in all ologis modules (via `jitter.excludeSrcSets`,
+never committed) so javac compiled every module's full source against the
+full upstream model. After the fixes below, `./gradlew compileAll --continue`
+passes completely (backend incl. WAR assemble, frontend, acceptancetest,
+integration tests - zero errors).
+
+**Source fixes (13 modified files + 1 new file, all uncommitted):**
+
+1. Flavour rot - stale references in code of flavours that are not actively
+   built (MPK builds were already broken under the released Spoon plugin):
+   stale nested-type imports (`Account.AccountType`,
+   `Account.AccountLocationType` - AccountFinder, BasicDebitorScenario),
+   stale jaxb package paths (`peem.connectivity.sitefs.*` for classes that
+   live in `peem.connectivity` - 6 files in mpk-cc-contracts), dead imports
+   (`CancellationReason.PICKING_CHECK`, undeclared `info.kiedrowski.mpt`
+   static import in 2 ADG tests), conflicting duplicate hamcrest import
+   (AccountDaoITest).
+2. Flavour-inconsistent interface/implementer pairs - gated interface
+   methods without an implementation in classes that survive other
+   flavours: `BmxCustOrderShippingAttrAdapter` (1 method),
+   `MfrConnector` (11 methods), `PeemSystemConnector` (1 method),
+   `DbaWmsConnectivityTestHelper` (13 methods). Each got an
+   `@OnlyIf`-annotated implementation with the flavour set of the
+   interface method, so every flavour output stays byte-identical to
+   today.
+3. Two public top-level classes in one file (`StockLocation` inside
+   `MdFlowIdentifier.java` - only compilable when the flavour dropped one
+   of them); moved to its own file.
+
+**Structural items (build-level, not line-fixable):**
+
+1. Flavour-variant jaxb generation: `mpk-cc-contracts` generates message
+   classes from flavour-variant XSDs (`*_Mpk.xsd`), which the
+   flavour-aware resource pipeline drops in the active flavour. The
+   sitefs message classes can therefore only exist in one flavour's
+   generated set. The full model needs all variants generated (worked
+   around with a never-committed copy step in `buildJaxb.gradle`; the
+   design for the real solution is open - package-scoped variants or
+   flavour-independent schemas).
+2. xjc-generated `package-info` classes collide with the flavour-gated
+   ones from main when the jar packs all source set outputs (worked around
+   with `duplicatesStrategy = EXCLUDE`).
+
+**Cost assessment**: the line-fixable part is small and mechanical (13
+files, most of them one import or a handful of annotation-tagged stub
+implementations). The two structural items need a design decision. All
+fixes live as uncommitted working-tree state in ologis for review.
+
 ## Next steps
 
 - Decide whether the ologis source migration to a self-compilable 150% model
