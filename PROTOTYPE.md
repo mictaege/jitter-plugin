@@ -119,6 +119,39 @@ included plugin builds under Gradle 9.8 with deprecation warnings only).
 Validated end to end on `shared/shared-dto` (131 annotated files, 375 class
 files, flavour Dba): compile -> strip -> scoped verify -> jar, all green.
 
+### compileAll inventory (2026-10-07, flavour Dba, prototype wired in)
+
+`./gradlew compileAll --continue`:
+
+- **Stripped and verified green**: `shared-base`, `shared-dto`,
+  `acceptancetest:base/stories/process`, `ologis-itest-bdd`,
+  `ologis-mpk-cc-itest-bdd` (all `jitterStripMain` + `jitterVerifyMain`).
+- **Failed (javac, both the cross-module flavour visibility issue)**:
+  - `:backend:ologis-api:compileJava` (~62 errors)
+  - `:frontend:ologis-ui-base:compileJava` (incl. "Package
+    `com.zitecs.ologis.mauve.s3.v1.connectivity` ist nicht vorhanden")
+- Everything downstream of the two failing compiles was skipped - this is the
+  first wall, not the complete inventory.
+
+Missing symbols by pattern (all referenced from gated code or ungated
+import statements that Spoon removed per flavour):
+
+1. static-imported gated enum constants: `Brand.MPK`, `MEDIHERZ`,
+   `PREISAPO`, `MPK_FS`, `MPK_BS`, `ZALANDO`, `WIR_LBN`, ... (e.g.
+   `BrandSetToIntAttributeConverter`)
+2. static-imported gated settings constants:
+   `OmSystemSettings.TRACKING_MHP_*`, `TRACKING_DHL_*` (e.g.
+   `ShipmentProviderCfgKey`, `SiteTransferOrderItem`)
+3. gated classes of shared-dto: `VKPriceImportErrorReason`,
+   `SiteTransferReceiptDiffReason`, `ScriptType`, `AccountIdentification`
+4. gated package of shared-base (BMX): `MauveSystemSettings` - ungated
+   import in `ServiceDataBuilder`, used only inside `@OnlyIf(BMX)` methods
+5. gated UI constants: `BMX_EH_ROBOT_ZERO/ONE`, `MPK_*_ROBOT_*`
+
+All of these are instances of blocker "Multi-project flavour visibility"
+above: javac compiles the downstream module's full source against the
+already-stripped upstream jar.
+
 ### Blockers found (ologis semantics, not plugin bugs)
 
 1. **ologis's 150% model is not self-compilable.** The source transformation
