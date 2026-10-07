@@ -234,6 +234,70 @@ files, most of them one import or a handful of annotation-tagged stub
 implementations). The two structural items need a design decision. All
 fixes live as uncommitted working-tree state in ologis for review.
 
+## Option 1 proven: union schemas + @OnlyIf-annotated jaxb members (2026-10)
+
+The flavour-variant jaxb generation was made 150%-compilable on the
+`OrderInsertMessage` family of `ologis-mpk-cc-contracts` (the family with the
+largest schema differences). ologis already uses the jaxb2 `annotate` plugin
+via XSD `appinfo` (`annox:annotatePackage` -> package-info `@OnlyIf`) for
+package-level gating; the spike extends the same mechanism to members:
+
+- **Union schema** (`src/jaxb/schema/OrderInsertMessageUnion.xsd`): base
+  members plus `rx_flag` (Bmx-only); `print_ret`/`print_ship` are base-only
+  (base is active in Mpk/Dba). Patterns are unioned; requiredness and
+  cardinality differences have no Java-shape impact. Generation becomes
+  flavour-independent for this family; the flavour-variant resource XSDs
+  remain the runtime validation contracts, untouched.
+- **Annotated binding** (`OrderInsertBindingUnion.xjb`):
+  `annox:annotatePropertyField/Getter/Setter` with
+  `@OnlyIf("Bmx")` / `@OnlyIf({"Mpk", "Dba"})` on the flavour-specific
+  members. Values are the flavour CONSTANT VALUES ("Mpk"), not the constant
+  names ("MPK") - annotations inline constant values.
+- **Resulting shapes** (verified with javap on the stripped classes):
+  - Dba: whole generated package stripped (existing package gate {Mpk, Bmx})
+    - identical to the Spoon-era Dba jar (only sitefs classes)
+  - Mpk: `OrderInsertImpl` without `rxFlag`, with `printRet`/`printShip`
+  - Bmx: `OrderInsertImpl` with `rxFlag`, without `printRet`/`printShip`
+
+### Findings
+
+1. **Annox syntax** (`org.jvnet.jaxb:jaxb-plugin-annotate` 4.0.2): the
+   annotation is a TEXT child of `annox:annotate*`, parsed as a Java
+   annotation expression (`@com.github...OnlyIf("Bmx")`); children in the
+   annox namespace are rejected by xjc's binding grammar.
+2. **Property removal needs all parts tagged**: field, getter and setter,
+   otherwise the stripper leaves dangling halves.
+3. **Intra-module full-model visibility**: the jaxb source set is upstream
+   of main (via `main.compileClasspath += jaxb.output`) and main's full
+   source references the generated classes - so the jaxb strip must run
+   AFTER the consuming compilations, not after its own compile (the
+   default `classes`-task wiring). The spike wires this manually in
+   `buildJaxb.gradle` (late strip tasks + jar/test dependencies); the
+   plugin needs a supported option for this case. The same argument applies
+   to jaxbHelper (flavour-gated interfaces implemented by the generated
+   classes).
+4. **Kotlin caveat**: `compileTestKotlin` consumes the main jar (KGP), so
+   late stripping cannot wait for it without an ordering cycle - Kotlin
+   test code sees the stripped generated classes. Matches the documented
+   ologis test convention (tests of gated code must be gated).
+
+### Open items
+
+- Roll out to the remaining variant families (`ArticlesMessages`,
+  `CloseGoodsInOrderIdMessage`, `OrderRepack` (rename case), the
+  `mfr2022` family in ologis-mfr) - mechanical.
+- `ObjectFactory`/`ObjectFactoryTest` in Dba: the ungated generated factory
+  disappears with its gated package; ungated tests referencing it must
+  follow the ologis test rule (gate the test) or the factory needs explicit
+  handling.
+- Plugin support for late stripping (e.g. a `jitter` extension option)
+  instead of the manual `buildJaxb.gradle` wiring.
+- Enum values: no flavour-variant XSD contains enumerations today. If one
+  appears, prefer the established `jaxb:javaType` mapping to a handwritten
+  annotated enum (the `XmlPaymentType` pattern); a generated enum would use
+  `annox:annotateEnumConstant`, which the plugin supports and the stripper
+  handles (enum constant removal + renumbering + switch-map cleaning).
+
 ## Next steps
 
 - Decide whether the ologis source migration to a self-compilable 150% model
