@@ -6,9 +6,10 @@ import org.gradle.api.tasks.TaskAction
 
 /**
  * Strips the flavour specific bytecode from the compiled classes of one
- * source set. The task runs after the whole 150% model has been compiled,
- * because the downstream source sets have to be compiled against the
- * complete model as well.
+ * source set. The task runs directly after the compilation of its source
+ * set, so that every consumer of the classes (downstream source sets,
+ * jars, tests, run tasks) only sees the stripped flavour model - the same
+ * consistency model the source transformation had.
  */
 class JitterStripTask extends DefaultTask {
 

@@ -29,6 +29,7 @@ class JitterPlugin implements Plugin<Project>  {
 
         project.afterEvaluate({ ->
             def stripTasks = []
+            def scopedVerifyTasks = [:]
             def allClassesDirs = [] as Set
 
             project.sourceSets.all { srcSet ->
@@ -38,8 +39,30 @@ class JitterPlugin implements Plugin<Project>  {
                     def stripTask = project.task("jitterStrip${srcSet.name.capitalize()}", type: JitterStripTask)
                     stripTask.classesDirs = srcSet.output.classesDirs.files
                     stripTask.dependsOn srcSet.compileJavaTaskName
-                    stripTask.mustRunAfter project.tasks.withType(JavaCompile)
                     stripTasks << stripTask
+
+                    // Wire the stripping into the classes task of the source
+                    // set, so that every consumer of the output (downstream
+                    // source sets, jars, wars, tests, run tasks) sees the
+                    // stripped classes. The Kotlin plugin compiles downstream
+                    // source sets against the jars of upstream source sets, so
+                    // consumers must be reached through the classes task - an
+                    // artifact must never wait for the compilation of a source
+                    // set that consumes the artifact.
+                    project.tasks.named(srcSet.classesTaskName).configure {
+                        it.dependsOn stripTask
+                    }
+
+                    // A scoped verify checks only the classes of its own source
+                    // set against the members removed from that source set. It
+                    // allows artifact tasks like jar and war to fail early on
+                    // dangling references, without pulling the compilation of
+                    // source sets that consume the artifact.
+                    def scopedVerify = project.task("jitterVerify${srcSet.name.capitalize()}", type: JitterVerifyTask)
+                    scopedVerify.stripTasks = [stripTask]
+                    scopedVerify.allClassesDirs = stripTask.classesDirs
+                    scopedVerify.dependsOn stripTask
+                    scopedVerifyTasks[srcSet.name] = scopedVerify
                 }
             }
 
@@ -51,7 +74,14 @@ class JitterPlugin implements Plugin<Project>  {
 
                 project.tasks.withType(Test).configureEach { it.dependsOn verifyTask }
                 project.tasks.withType(JavaExec).configureEach { it.dependsOn verifyTask }
-                project.tasks.withType(Jar).configureEach { it.dependsOn verifyTask }
+                project.tasks.withType(Jar).configureEach { jarTask ->
+                    if (jarTask.name == 'jar' || jarTask.name == 'war') {
+                        def mainVerify = scopedVerifyTasks['main']
+                        if (mainVerify != null) {
+                            jarTask.dependsOn mainVerify
+                        }
+                    }
+                }
             }
         })
 

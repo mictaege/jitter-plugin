@@ -17,10 +17,21 @@ Bytecode stripping couples only to the class file format (works across Java
 
 ## How it works
 
-- `jitterStrip<SrcSet>` tasks run after compilation of the whole project
-  (`mustRunAfter` all `JavaCompile` tasks) and before `test`/`run`/`jar`
-  (aggregate `jitterVerify` task in between). Downstream source sets therefore
-  still compile against the full 150% model.
+- Stripping is wired into the `classes` task of each source set:
+  `jitterStrip<SrcSet>` runs after the compilation of its own source set, and
+  every consumer of the source set output (downstream source sets, jars,
+  wars, tests, run tasks) depends on the `classes` task, so it only ever sees
+  the stripped classes - the same consistency model the source transformation
+  had. The strip task must NOT be ordered after the whole project's
+  compilation: the Kotlin Gradle plugin compiles downstream source sets
+  against the jar of the main source set, and a `mustRunAfter` on all
+  `JavaCompile` tasks creates a circular dependency with that wiring.
+- Per source set there is a scoped `jitterVerify<SrcSet>` task that checks
+  only the classes of that source set against its own removals. `jar`/`war`
+  depend on `jitterVerifyMain` (an artifact task must never wait for the
+  compilation of a source set that consumes the artifact). Tests and
+  `JavaExec` tasks depend on the aggregate `jitterVerify` task, which checks
+  all source sets of the project against all removals.
 - `BytecodeStripper` (package `com.github.mictaege.jitter.plugin`, ASM tree API):
   - `@OnlyIf`: removes classes, packages (package-info), fields, methods
   - `@Fork`: replaces the method body with the template method's body, deletes
@@ -34,6 +45,14 @@ Bytecode stripping couples only to the class file format (works across Java
   - Lambdas: `lambda$<removedMethod>$*` synthetic methods removed
   - Inline field initializers of removed fields removed from constructors
     (backward stack-effect scan; bails out on branchy initializers)
+  - Orphaned synthetics removed (fixpoint sweep, reference counting over the
+    surviving bytecode): anonymous inner classes, switch map classes and
+    enum-constant-body classes (`Outer$N`) and `access$NNN` methods whose only
+    purpose was serving removed code
+  - Shared switch map classes survive (the surviving forked method body still
+    uses them), but their init entries for removed enum constants are removed
+    including the `NoSuchFieldError` handler rows. Entries for constants of
+    other modules are left alone; the handler tolerates them at runtime.
   - jitter annotations stripped from surviving bytecode (Spoon parity)
   - Writes in place, deletes emptied directories
 - `ReferenceVerifier` + `jitterVerify`: fails the build if any surviving class
@@ -53,10 +72,12 @@ Bytecode stripping couples only to the class file format (works across Java
 
 ## Known limitations (all produce clear `jitterVerify` build errors)
 
-- Anonymous inner classes declared inside `@OnlyIf` methods are not auto-removed
-- synthetic `access$NNN` orphans are not auto-removed
-- `$SwitchMap` references from surviving switch statements are reported, not fixed
+- local classes (`Outer$1Local`) declared inside `@OnlyIf` methods are not
+  auto-removed
 - branchy field initializers (ternaries etc.) bail out and are reported
+- a non-standard jar task that packages main classes and is consumed by the
+  same module's test/testFixtures compilation would reintroduce the task
+  graph cycle (standard `jar`/`war` are handled via the scoped verify)
 
 ## Validation performed (eval.jitter)
 
@@ -66,12 +87,74 @@ Bytecode stripping couples only to the class file format (works across Java
 - Parity vs Spoon output: identical class inventory (except Spoon leaks template
   classes, this branch does not), identical `Dao` content, no annotations,
   exact line numbers; ESA build ~14s vs ~29s with Spoon
-- Plugin test suite: 37 tests green (incl. executed stripped enums, lambda and
-  field-initializer scenarios)
+- Plugin test suite: 39 tests green (incl. executed stripped enums, lambda,
+  field-initializer, orphaned-synthetic and switch-map scenarios)
+
+## Test against a large code base (ologis, 2026-10)
+
+ologis: ~15.5k Java files, 20 modules, mixed Kotlin/Java, Gradle 9.8.0,
+jitter annotations in 2,785 files (6.9k `@OnlyIf`, 1.5k `@Fork`, 18 `@Alter`),
+3 flavours. The plugin was substituted into the consumer build via
+`includeBuild` in the consumer's `buildSrc/settings.gradle.kts` (works; the
+included plugin builds under Gradle 9.8 with deprecation warnings only).
+
+### Bugs found and fixed (validations on real ologis code)
+
+1. **Task graph cycle** (Kotlin projects): the Kotlin Gradle plugin compiles
+   test/testFixtures against the main jar. `jar -> jitterVerify -> jitterStrip*
+   -> compileTest* -> jar` cycled. Fixed with the `classes`-task wiring and
+   scoped `jitterVerify<SrcSet>` tasks described above.
+2. **Orphaned synthetic companions**: `@Fork` templates with enum switches
+   (mainstream in ologis) leave switch map classes behind; the reference
+   counting fixpoint sweep now removes them.
+3. **Shared switch map classes**: javac generates one `Outer$N` switch map
+   class per enum, shared by all switches over it - including removed
+   templates. The entries of removed constants are now cleaned (validated on
+   `PaymentType$1`/`CustomerPaymentType$1`: zero removed-constant references,
+   exception table rows reduced accordingly).
+
+Validated end to end on `shared/shared-dto` (131 annotated files, 375 class
+files, flavour Dba): compile -> strip -> scoped verify -> jar, all green.
+
+### Blockers found (ologis semantics, not plugin bugs)
+
+1. **ologis's 150% model is not self-compilable.** The source transformation
+   produced a self-consistent source universe per flavour; the union of all
+   flavours is not valid Java, so "compile the 150% model untouched" cannot
+   work for this code base. Concrete javac failures against the full model:
+   - `BmxCustOrderShippingAttrAdapter` (`@OnlyIf(BMX)`) does not implement
+     `setFixedShipmentProvider` (`@OnlyIf({MPK, DBA})`) of the interface it
+     implements - consistent per flavour, inconsistent in the 150% model.
+   - `AccountFinder` (`@OnlyIf(MPK)`) imports `Account.AccountType`, a nested
+     type that does not exist in the 150% model at all (it compiles in some
+     flavour's transformed universe or not at all).
+   - Static imports of flavour-gated enum constants (`import static Brand.*`)
+     resolve eagerly in javac and fail once the constant is removed from the
+     upstream jar; Spoon removed the import lines with the gated code.
+   Adopting bytecode stripping here requires making the 150% model
+   self-compilable, i.e. a deliberate source migration in the consumer.
+2. **Multi-project flavour visibility.** Downstream modules' full sources
+   reference upstream members that other flavours remove, so downstream
+   compilation needs the full upstream model, while downstream tests and
+   packaging need the stripped upstream. The design this implies: producers
+   expose a full-model artifact for compilation (e.g. classes dirs via
+   `apiElements`) and a stripped artifact for runtime (jar built after
+   stripping); stripping runs after all consumer compilations. Not yet
+   implemented.
+3. **Critical terms**: consumers configure `includes =
+   ['generated-sources/spoon/main/**', ...]`; with bytecode stripping the
+   spoon tree never exists and the source part of the check silently scans
+   nothing. Consumers need to retarget the includes (e.g. at the class files)
+   or the plugin needs a bytecode-scanning mode.
 
 ## Next steps
 
-- Test against larger code bases (this is the main reason the branch exists)
+- Decide whether the ologis source migration to a self-compilable 150% model
+  is worth the Spoon-independent build (the blocker above is a code base
+  convention, not a plugin defect)
+- Implement the multi-project artifact design (full model for compilation,
+  stripped model for runtime/packaging), then re-run the ologis validation
+- Re-validate eval.jitter after the task wiring change
 - If it holds: update README/docs, decide on removing the dead Spoon processors
   and the spoon-gradle-plugin dependency, and coordinate the release with
   jitter-api consumers

@@ -338,6 +338,100 @@ public class BytecodeStripperTest {
                 dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
     }
 
+    @Test
+    void removesSwitchMapEntriesOfRemovedForkTemplates() throws Exception {
+        final Path classes = compile(
+                "test/Direction.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public enum Direction {\n"
+                        + "  UP, DOWN,\n"
+                        + "  @OnlyIf(\"ESA\") ESA_ONLY,\n"
+                        + "  @OnlyIf(\"NASA\") NASA_ONLY\n"
+                        + "}\n",
+                "test/Navigator.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Fork;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public class Navigator {\n"
+                        + "  @Fork(ifActive = \"ESA\", to = \"navEsa\")\n"
+                        + "  @Fork(ifActive = \"NASA\", to = \"navNasa\")\n"
+                        + "  public String nav(final Direction d) { throw new UnsupportedOperationException(); }\n"
+                        + "  @OnlyIf(\"ESA\")\n"
+                        + "  private String navEsa(final Direction d) {\n"
+                        + "    switch (d) { case UP: return \"up\"; case ESA_ONLY: return \"esa\"; default: return \"?\"; }\n"
+                        + "  }\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  private String navNasa(final Direction d) {\n"
+                        + "    switch (d) { case DOWN: return \"down\"; case NASA_ONLY: return \"nasa\"; default: return \"?\"; }\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode navigator = read(classes, "test/Navigator");
+        assertThat(method(navigator, "nav", "(Ltest/Direction;)Ljava/lang/String;"), is(not(nullValue())));
+        assertThat(method(navigator, "navEsa", "(Ltest/Direction;)Ljava/lang/String;"), is(nullValue()));
+        assertThat(method(navigator, "navNasa", "(Ltest/Direction;)Ljava/lang/String;"), is(nullValue()));
+
+        // javac generates one shared switch map class for both switches. It
+        // survives, because the forked method body still uses it, but the
+        // entries of the removed constants have to be gone.
+        final ClassNode switchMap = read(classes, "test/Navigator$1");
+        assertThat(switchMap.fields.stream()
+                .anyMatch(f -> f.name.startsWith("$SwitchMap$")), is(true));
+        final MethodNode clinit = method(switchMap, "<clinit>", "()V");
+        assertThat("no strip errors expected: " + result.getErrors(),
+                result.getErrors().isEmpty(), is(true));
+        assertThat(bytecode(clinit).contains("NASA_ONLY"), is(false));
+        assertThat(bytecode(clinit).contains("UP"), is(true));
+        assertThat(clinit.tryCatchBlocks.size(), is(3));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+    }
+
+    @Test
+    void removesOrphanedAnonymousClassesOfRemovedMethods() throws Exception {
+        final Path classes = compile("test/Runner.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public class Runner {\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  public Runnable nasaOnly() {\n"
+                        + "    return new Runnable() { public void run() { } };\n"
+                        + "  }\n"
+                        + "  public Runnable plain() {\n"
+                        + "    return new Runnable() { public void run() { } };\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode runner = read(classes, "test/Runner");
+        assertThat(method(runner, "nasaOnly", "()Ljava/lang/Runnable;"), is(nullValue()));
+        assertThat(method(runner, "plain", "()Ljava/lang/Runnable;"), is(not(nullValue())));
+
+        final List<String> anonymous = new java.util.ArrayList<>();
+        for (int i = 1; i <= 2; i++) {
+            final String name = "test/Runner$" + i;
+            if (Files.exists(classes.resolve(name + ".class"))) {
+                anonymous.add(name);
+            }
+        }
+        assertThat("only the anonymous class of the surviving method survives",
+                anonymous.size(), is(1));
+        assertThat(bytecode(method(runner, "plain", "()Ljava/lang/Runnable;"))
+                .contains(anonymous.get(0)), is(true));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+    }
+
     private Path compile(final String... nameAndSourcePairs) throws IOException {
         if (nameAndSourcePairs.length % 2 != 0) {
             throw new IllegalArgumentException("expected name/source pairs");
