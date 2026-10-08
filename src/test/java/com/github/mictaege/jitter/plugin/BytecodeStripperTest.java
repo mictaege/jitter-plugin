@@ -110,6 +110,31 @@ public class BytecodeStripperTest {
     }
 
     @Test
+    void keepsNestedPackagesOfRemovedPackages() throws Exception {
+        final Path classes = compile(
+                "special/package-info.java",
+                "@OnlyIf(\"NASA\")\n"
+                        + "package special;\n\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n",
+                "special/Special.java",
+                "package special;\n"
+                        + "public class Special { }\n",
+                "special/sub/package-info.java",
+                "@Deprecated\n"
+                        + "package special.sub;\n",
+                "special/sub/Sub.java",
+                "package special.sub;\n"
+                        + "public class Sub { }\n");
+
+        new BytecodeStripper().strip(classes);
+
+        assertThat(Files.exists(classes.resolve("special/Special.class")), is(false));
+        assertThat(Files.exists(classes.resolve("special/package-info.class")), is(false));
+        assertThat(Files.exists(classes.resolve("special/sub/Sub.class")), is(true));
+        assertThat(Files.exists(classes.resolve("special/sub/package-info.class")), is(true));
+    }
+
+    @Test
     void replacesMethodBodyByForkTemplate() throws Exception {
         final Path classes = compile("test/Forker.java",
                 "package test;\n"

@@ -155,9 +155,12 @@ public final class BytecodeStripper {
         if (!removedPrefixes.isEmpty()) {
             final Set<String> removed = new TreeSet<>();
             nodes.keySet().removeIf(name -> {
-                if (removedPrefixes.stream().anyMatch(name::startsWith)) {
-                    removed.add(name);
-                    return true;
+                for (final String prefix : removedPrefixes) {
+                    if (name.startsWith(prefix)
+                            && !name.substring(prefix.length()).contains("/")) {
+                        removed.add(name);
+                        return true;
+                    }
                 }
                 return false;
             });
