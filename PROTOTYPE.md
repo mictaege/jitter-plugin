@@ -298,6 +298,33 @@ package-level gating; the spike extends the same mechanism to members:
   `annox:annotateEnumConstant`, which the plugin supports and the stripper
   handles (enum constant removal + renumbering + switch-map cleaning).
 
+### Relocation to the original locations (2026-10)
+
+The union schema and the flavour tags moved to the original file locations
+of the flavour-variant family (no separate src/jaxb/schema directory
+anymore):
+
+- `OrderInsertMessage.xsd` (resource, old location) now contains the union
+  of the former base and `_Bmx` schemas; `OrderInsertMessage_Bmx.xsd` is
+  deleted. Generation and runtime validation both use this schema - the
+  flavour-specific leniency of the removed optional attributes is
+  negligible.
+- `OrderInsertBinding.xjb` (old location) carries the annox rules:
+  `annox:annotatePropertyField/Getter/Setter` with `@OnlyIf` for
+  `rx_flag` (Bmx only) and `print_ret`/`print_ship` (Mpk and Dba only).
+  Schema appinfo does NOT work for property-level annox customizations on
+  inline attributes (only for schema/package level) - the binding file is
+  the right place.
+
+Re-verified flavour matrix after relocation (javap on the stripped
+`OrderInsertImpl`): Dba - package stripped, nested sitefs survives; Mpk -
+no `rxFlag`, `printRet`/`printShip` present; Bmx - `rxFlag` present, no
+`printRet`/`printShip`.
+
+Along the way the stripper gained a bugfix: package removal used to delete
+nested packages as well (prefix match); a package gate now covers only its
+direct classes, as under Spoon.
+
 ## Next steps
 
 - Decide whether the ologis source migration to a self-compilable 150% model
