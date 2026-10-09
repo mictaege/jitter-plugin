@@ -325,6 +325,46 @@ Along the way the stripper gained a bugfix: package removal used to delete
 nested packages as well (prefix match); a package gate now covers only its
 direct classes, as under Spoon.
 
+### Full unification + plugin support (2026-10)
+
+All flavour-variant XSD families of `ologis-mpk-cc-contracts` are unified; the
+consumer build carries no stripping knowledge anymore.
+
+**Plugin** (`f355c20`):
+- `jitter { lateStripSrcSets = [...] }`: source sets whose classes other
+  source sets compile against are stripped after the main compilation and
+  before jar/war/test/run (replaces the hand-wired late strip tasks).
+- Class removal cascades to nested classes (`Outer$*`).
+
+**Consumer XSDs** (all in the original locations, variants deleted):
+- `ArticlesMessages.xsd`: union; `verifyable` tagged `@OnlyIf("Mpk")` in
+  `ArticleInsertBinding.xjb`; package gate `@OnlyIf({Mpk, Bmx})` relocated
+  from the deleted `_Dba` variant.
+- `CloseGoodsInOrderIdMessage.xsd`: union; package gate relocated from the
+  deleted `_Dba` variant.
+- `OrderRepackMessage.xsd`: union carrying both attribute sets; renamed
+  attributes tagged in `OrderRepack.xjb` (`box_number`/`carton_number`
+  {Mpk, Dba}, `source_tu`/`dest_tu` {Bmx}).
+- Sitefs `_Mpk.xsd` stay as runtime resources; their binding references the
+  `_Mpk` filenames and generation reads the schemas from
+  `src/main/resources`, which makes generation flavour independent.
+
+**Remaining consumer changes** (generation/packaging, not stripping):
+`buildJaxb.gradle` keeps three items - `jaxb extLibs.jitter.api` (annox
+resolves @OnlyIf at generation time), xjc schema/binding scan from
+`src/main/resources`, and `jar { duplicatesStrategy = EXCLUDE }` (replaces
+the model merge the source transformation did implicitly for colliding
+package-infos). All mode wiring lives in `buildSrc/jitter.gradle`:
+`lateStripSrcSets = ['jaxb', 'jaxbHelper']` with `-PjitterBcStrip`, otherwise
+the sets are excluded (full-model mode).
+
+**Verified**: plain `compileAll` green in Dba; strip-mode flavour matrix
+(javap + jar inventory) - Dba: generated `peem.connectivity` package
+stripped, nested sitefs preserved, handwritten package-infos deduped;
+Mpk: `rxFlag`/`source_tu`/`dest_tu` stripped, `verifyable`/
+`printRet`/`printShip`/`boxNumber`/`cartonNumber` present; Bmx: the
+mirror image. Plugin suite 40 tests green.
+
 ## Next steps
 
 - Decide whether the ologis source migration to a self-compilable 150% model
