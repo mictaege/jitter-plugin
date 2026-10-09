@@ -44,7 +44,12 @@ Bytecode stripping couples only to the class file format (works across Java
     supported as well)
   - Lambdas: `lambda$<removedMethod>$*` synthetic methods removed
   - Inline field initializers of removed fields removed from constructors
-    (backward stack-effect scan; bails out on branchy initializers)
+    and `<clinit>` (backward stack-effect scan). Labels are treated as
+    transparent markers, so multi-line initializer expressions (builder
+    chains etc.) are removable; a block is only removed when it is
+    self-contained (no branch into it, no exception/local-variable range
+    crossing it). Branchy initializers (ternaries etc.) still bail out and
+    are reported.
   - Orphaned synthetics removed (fixpoint sweep, reference counting over the
     surviving bytecode): anonymous inner classes, switch map classes and
     enum-constant-body classes (`Outer$N`) and `access$NNN` methods whose only
@@ -59,7 +64,9 @@ Bytecode stripping couples only to the class file format (works across Java
   still references removed classes/members. This replaces the compile-time
   consistency check that the source transformation got for free.
 - Flavour selection is unchanged (`flavourXyz` tasks / `systemProp.jitter.active.flavour`).
-- Resource handling (`ProcessResourcesListener`, critical terms tasks) untouched.
+- Resource handling (`ProcessResourcesListener`, critical terms tasks): the flavour
+  suffix convention is unchanged; in addition resources can now be flavour gated
+  via their own content (see "Annotation-gated resources" below).
 - The old Spoon processors remain in the tree but are no longer wired.
 
 ## Semantics to keep in mind
@@ -364,6 +371,112 @@ stripped, nested sitefs preserved, handwritten package-infos deduped;
 Mpk: `rxFlag`/`source_tu`/`dest_tu` stripped, `verifyable`/
 `printRet`/`printShip`/`boxNumber`/`cartonNumber` present; Bmx: the
 mirror image. Plugin suite 40 tests green.
+
+## Source-set merge: lateStripSrcSets removed again (2026-10)
+
+The late-strip option became obsolete: the consumer dissolved its
+`jaxb`/`jaxbHelper` source sets into `main` (additional srcDirs of main),
+so generated classes, helper classes and handwritten code compile as ONE
+source set and strip as one unit (`jitterStripMain`, standard
+`classes`-task wiring). No consumer code compiles against another source
+set's output anymore, which removes the whole reason late stripping
+existed (and the Kotlin-jar ordering caveat with it).
+
+Consumer consequences of the merge (ologis, all uncommitted):
+- xjc-generated `package-info` classes no longer collide with the
+  handwritten ones (single compilation) - the redundant
+  `annox:annotatePackage` gates were removed from the schemas; only
+  `base.xsd` keeps its gate (no handwritten package-info there).
+- `jar { duplicatesStrategy = EXCLUDE }` and the `from sourceSets.*.output`
+  packaging lines are gone; the jar packs main output only.
+- `jitter.lateStripSrcSets` is removed from the plugin DSL; strip mode now
+  simply leaves `main` un-excluded for the stripped contract modules.
+- duplicate handwritten `peem/connectivity` package-info of the former
+  jaxbHelper set deleted; the itest-bdd module's direct
+  `sourceSets.jaxb.output` classpath lines removed (the `testFixtures`
+  dependency carries main already).
+
+### Ologis-only constructs found while stripping handwritten main code
+
+Stripping the handwritten main code of the contract modules (never done
+before - the earlier matrix only stripped generated classes) surfaced
+three real-world gaps; all fixed in the plugin:
+
+1. **`@Fork` on generic overrides**: javac copies method annotations to the
+   bridge method of a generic override. The stripper applied the fork twice
+   (real method consumes the template, bridge fails to find it). Bridge and
+   synthetic methods are now skipped as fork gateways.
+2. **Multi-line initializers**: javac emits labels at line boundaries inside
+   initializer expressions; the backward scan treated any label as a bail
+   out, so every builder-chain initializer of a removed static field left a
+   dangling store (first seen in `ConvertCheckingDestinationToStationIdCmd`).
+   Labels are transparent now, with the self-containment check above.
+3. **Cross-module `@Alter` templates** (ologis `MfrTableNames` ->
+   `PeemTableNamesDefault` in `ologis-mpk-peem-api`): the template was
+   never resolvable - not in the target's package (Spoon's package-relative
+   lookup fails too), and not on the module's compile classpath (no
+   dependency at all). The plugin now resolves FQ-named templates from the
+   source set's compile classpath (`loadFromClasspath`; the template stays
+   where it is, the remapped copy is written into the stripped output -
+   matching Spoon's shadow-class intent), and the consumer got a
+   `compileOnly` dependency plus FQ `@Alter(with=...)` names. Note: the
+   construct fires in Dba only (the `mfr2022` package is DBA-gated, so
+   Mpk/Bmx remove the class before `@Alter` runs).
+
+### Verified (2026-10-09)
+
+- ologis plain `compileAll` (full model, no stripping): green in Dba and Mpk.
+- Strip-mode flavour matrix (`-PjitterBcStrip`, contracts+mfr, jar shape via
+  unzip/javap): Mpk - sitefs present, md/article/custorder/base present,
+  mfr connectivity absent; Bmx - md/article/custorder/base/sitefs absent,
+  peem connectivity present, mfr absent; Dba - md/article/custorder/base
+  present, sitefs and peem connectivity absent, mfr connectivity present
+  (24 classes), `MfrTableNames` content-replaced from the classpath
+  template.
+- Plugin suite: 42 tests green.
+
+## Annotation-gated resources (2026-10): one mechanism for classes and resources
+
+Closes the last gap of the suffix convention: XML resources can now carry
+their flavour gate in their own content, the same way classes do.
+
+**Plugin**: `XmlResourceGate` reads every `appinfo` section of an XML-ish
+resource (xsd, xjb, xsl, xslt, wsdl, xml) and collects the values of all
+jitter `@OnlyIf` annotation expressions found there (fully qualified or
+simple name, multiple annotations merged). The mechanism is generic - the
+plugin knows nothing about any XML vocabulary, it only uses the W3C
+standard `appinfo` annotation hook. `ProcessResourcesListener` excludes a
+gated resource from the processed resources when the active flavour is
+not part of the gate; a gated resource is never renamed (the gate
+expresses presence or absence, while the suffix convention remains for
+per-flavour content variants). Without an active flavour nothing is
+gated, mirroring the class model. Note that an xjc
+`annox:annotatePackage` gate doubles as a resource gate automatically -
+one annotation, one semantics.
+
+**ologis migration** (uncommitted): the 8 mfr
+`*MFR_Dba.xsd` schemas and the sitefs `*_Mpk.xsd` family dropped their
+suffixes and carry `@OnlyIf("Dba")`/`@OnlyIf("Mpk")` in a plain appinfo
+comment-style annotation (inert to xjc - no generated package-info, so
+no collision with the handwritten ones). The sitefs binding was renamed
+alongside and its schemaLocation updated; it carries no gate (xjb has no
+appinfo), so it ships in every flavour as dead weight - bindings are
+build-time inputs only.
+
+**Consequence to be aware of**: `base.xsd` of `mpk-cc-contracts`
+(`@OnlyIf({Mpk, Dba})` as annox generation gate) now also gates its
+resource - the schema disappears from the Bmx jar, consistent with the
+Bmx class model (the generated `com.zitecs.ologis.base` package is
+stripped there). Previously it shipped in every flavour's jar.
+
+**Verified**: plain `compileAll` green (Dba); strip-mode matrix green in
+Dba/Mpk/Bmx with correct resource shapes - Dba: the 8 mfr schemas
+present under their unsuffixed names (byte-identical jar content to the
+old rename mechanism), sitefs absent, base.xsd present; Mpk: both sitefs
+schemas present under their unsuffixed names, mfr schemas absent, only
+the ungated `mfr2022/.../base/base.xsd` remains in the mfr jar; Bmx:
+base.xsd newly absent (see above), everything else flavour-correct.
+Plugin suite: 49 tests green.
 
 ## Next steps
 
