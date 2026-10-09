@@ -32,6 +32,34 @@ class ProcessResourcesListener implements TaskExecutionListener {
                     }
                 }
             }
+            if (JitterUtil.anyFlavour()) {
+                excludeGatedResources(task)
+            }
+        }
+    }
+
+    /**
+     * Resources that carry a jitter gate in their own content (see
+     * {@link XmlResourceGate}) are dropped when the active flavour is not
+     * part of the gate. Unlike the suffix convention above this expresses
+     * presence or absence only - the file is never renamed.
+     */
+    private void excludeGatedResources(final ProcessResources task) {
+        final Set<String> gated = new HashSet<>()
+        task.source.visit { element ->
+            if (!element.isDirectory() && XmlResourceGate.isXml(element.name)) {
+                final List<String> flavours = XmlResourceGate.flavours(element.file)
+                if (flavours != null && flavours.every { flavour -> !JitterUtil.active(flavour) }) {
+                    gated.add(element.relativePath.pathString)
+                }
+            }
+        }
+        if (!gated.isEmpty()) {
+            task.configure {
+                gated.each { path -> excludes.add(path) }
+            }
+            JitterUtil.log().info("jitter: excluded flavour gated resources of flavour "
+                    + "${System.getProperty(JitterUtil.FLAVOUR_PROP)}: ${gated.sort()}")
         }
     }
 
