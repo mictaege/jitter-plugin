@@ -434,11 +434,7 @@ public final class BytecodeStripper {
         for (final ClassNode node : new ArrayList<>(nodes.values())) {
             final List<String> flavours = onlyIfFlavours(node);
             if (flavours != null && flavours.stream().noneMatch(JitterUtil::active)) {
-                nodes.remove(node.name);
-                result.removedClass(node.name);
-                result.info("Remove class " + node.name.replace('/', '.'));
-                log().info("Remove class " + node.name.replace('/', '.'));
-                dirty.add(node.name);
+                removeClass(nodes, result, dirty, node.name);
                 continue;
             }
             node.fields.removeIf(field -> {
@@ -476,6 +472,28 @@ public final class BytecodeStripper {
                 });
             }
         }
+    }
+
+    /**
+     * Removes a class together with its nested classes: the inner classes
+     * are dead without their outer class, so they must not survive the
+     * stripping of the outer one.
+     */
+    private void removeClass(final Map<String, ClassNode> nodes, final StripResult result,
+                             final Set<String> dirty, final String name) {
+        final List<String> removedNames = new ArrayList<>();
+        for (final String candidate : nodes.keySet()) {
+            if (candidate.equals(name) || candidate.startsWith(name + "$")) {
+                removedNames.add(candidate);
+            }
+        }
+        removedNames.forEach(removed -> {
+            nodes.remove(removed);
+            result.removedClass(removed);
+            result.info("Remove class " + removed.replace('/', '.'));
+            log().info("Remove class " + removed.replace('/', '.'));
+            dirty.add(removed);
+        });
     }
 
     /**

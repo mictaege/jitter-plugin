@@ -15,6 +15,14 @@ class JitterExtension {
     /** List of excluded source sets. */
     List<String> excludeSrcSets = new ArrayList<>()
 
+    /**
+     * List of source sets that are stripped late, i.e. after all
+     * compilations of the project have run and not right after their own
+     * compilation. Needed when another source set compiles against the
+     * full 150% model of this source set (e.g. generated jaxb classes).
+     */
+    List<String> lateStripSrcSets = new ArrayList<>()
+
     void flavour(Closure closure) {
         def instance = new FlavourCfg()
         flavours.add(instance)

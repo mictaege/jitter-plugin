@@ -457,6 +457,32 @@ public class BytecodeStripperTest {
                 dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
     }
 
+    @Test
+    void removesNestedClassesOfRemovedClasses() throws Exception {
+        final Path classes = compile(
+                "test/Outer.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "@OnlyIf(\"NASA\")\n"
+                        + "public class Outer {\n"
+                        + "  public static class Inner {\n"
+                        + "    public static class DeepInner { }\n"
+                        + "  }\n"
+                        + "  public static class Other { }\n"
+                        + "}\n",
+                "test/OuterLookalike.java",
+                "package test;\n"
+                        + "public class OuterLookalike { }\n");
+
+        new BytecodeStripper().strip(classes);
+
+        assertThat(Files.exists(classes.resolve("test/Outer.class")), is(false));
+        assertThat(Files.exists(classes.resolve("test/Outer$Inner.class")), is(false));
+        assertThat(Files.exists(classes.resolve("test/Outer$Inner$DeepInner.class")), is(false));
+        assertThat(Files.exists(classes.resolve("test/Outer$Other.class")), is(false));
+        assertThat(Files.exists(classes.resolve("test/OuterLookalike.class")), is(true));
+    }
+
     private Path compile(final String... nameAndSourcePairs) throws IOException {
         if (nameAndSourcePairs.length % 2 != 0) {
             throw new IllegalArgumentException("expected name/source pairs");
