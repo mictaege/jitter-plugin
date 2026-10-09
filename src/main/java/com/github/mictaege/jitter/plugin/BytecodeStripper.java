@@ -17,11 +17,16 @@ import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.IntInsnNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
+import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.LineNumberNode;
+import org.objectweb.asm.tree.LocalVariableNode;
+import org.objectweb.asm.tree.LookupSwitchInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TableSwitchInsnNode;
+import org.objectweb.asm.tree.TryCatchBlockNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
@@ -87,6 +92,17 @@ public final class BytecodeStripper {
      * reports what has been removed.
      */
     public StripResult strip(final Path classesDir) throws IOException {
+        return strip(classesDir, java.util.Collections.emptyList());
+    }
+
+    /**
+     * Strips all class files of the given directory (in place) and reports
+     * what has been removed. The given classpath is only used to resolve
+     * {@code @Alter} templates that live outside the stripped classes, e.g.
+     * in a dependent library.
+     */
+    public StripResult strip(final Path classesDir, final List<java.io.File> templateClasspath)
+            throws IOException {
         final StripResult result = new StripResult();
         final Map<String, ClassNode> nodes = new HashMap<>();
         final Map<String, Path> paths = new HashMap<>();
@@ -95,7 +111,7 @@ public final class BytecodeStripper {
         loadClasses(classesDir, nodes, paths);
 
         removePackages(nodes, result, dirty);
-        applyAltclasses(nodes, result, dirty);
+        applyAltclasses(nodes, result, dirty, templateClasspath);
         applyForkMethods(nodes, result, dirty);
         rewriteEnums(nodes, result, dirty);
         removeOnlyIf(nodes, result, dirty);
@@ -170,7 +186,7 @@ public final class BytecodeStripper {
     }
 
     private void applyAltclasses(final Map<String, ClassNode> nodes, final StripResult result,
-                                 final Set<String> dirty) {
+                                 final Set<String> dirty, final List<java.io.File> templateClasspath) {
         for (final ClassNode target : new ArrayList<>(nodes.values())) {
             final AnnotationNode matching = matchingAnnotation(target.visibleAnnotations, ALTER, ALTERNATIVES, "with");
             if (matching == null) {
@@ -180,7 +196,9 @@ public final class BytecodeStripper {
             final String templateName = with.contains(".")
                     ? with.replace('.', '/')
                     : packageOf(target.name) + with;
-            final ClassNode template = nodes.get(templateName);
+            final ClassNode template = nodes.containsKey(templateName)
+                    ? nodes.get(templateName)
+                    : loadFromClasspath(templateClasspath, templateName);
             if (template == null) {
                 result.error("The given alternative class " + with + " could not be found");
                 continue;
@@ -191,19 +209,72 @@ public final class BytecodeStripper {
             } else {
                 renamed.access &= ~Opcodes.ACC_PUBLIC;
             }
+            final boolean localTemplate = nodes.containsKey(templateName);
             nodes.remove(templateName);
             nodes.put(target.name, renamed);
-            result.removedClass(templateName);
             result.info("Replace class " + target.name.replace('/', '.')
-                    + " with " + with + ". Removed template " + templateName.replace('/', '.'));
+                    + " with " + with + (localTemplate
+                        ? ". Removed template " + templateName.replace('/', '.')
+                        : " (template from the classpath, kept where it is)"));
+            if (localTemplate) {
+                result.removedClass(templateName);
+            }
             dirty.add(target.name);
         }
+    }
+
+    /**
+     * Loads the given class from the given classpath entries, or null if no
+     * entry contains it. Used for {@code @Alter} templates that live in a
+     * dependent library instead of the stripped classes themselves.
+     */
+    private ClassNode loadFromClasspath(final List<java.io.File> classpath, final String internalName) {
+        if (classpath == null) {
+            return null;
+        }
+        for (final java.io.File entry : classpath) {
+            try {
+                final byte[] bytes;
+                if (entry.isDirectory()) {
+                    final Path file = entry.toPath().resolve(
+                            internalName.replace('/', java.io.File.separatorChar) + ".class");
+                    if (!java.nio.file.Files.isRegularFile(file)) {
+                        continue;
+                    }
+                    bytes = java.nio.file.Files.readAllBytes(file);
+                } else {
+                    try (final java.util.zip.ZipFile zip = new java.util.zip.ZipFile(entry)) {
+                        final java.util.zip.ZipEntry e = zip.getEntry(internalName + ".class");
+                        if (e == null) {
+                            continue;
+                        }
+                        try (final java.io.InputStream in = zip.getInputStream(e)) {
+                            bytes = in.readAllBytes();
+                        }
+                    }
+                }
+                final ClassNode node = new ClassNode();
+                new ClassReader(bytes).accept(node, 0);
+                return node;
+            } catch (final IOException e) {
+                log().warn("Could not read " + internalName + " from classpath entry " + entry + ": "
+                        + e.getMessage());
+            }
+        }
+        return null;
     }
 
     private void applyForkMethods(final Map<String, ClassNode> nodes, final StripResult result,
                                   final Set<String> dirty) {
         for (final ClassNode node : nodes.values()) {
             for (final MethodNode method : new ArrayList<>(node.methods)) {
+                // javac copies method annotations to the bridge methods of
+                // generic overrides. The bridge is never a fork gateway - the
+                // real method is - and the template is consumed by the first
+                // application, so a second one on the bridge would fail.
+                if ((method.access & (Opcodes.ACC_BRIDGE | Opcodes.ACC_SYNTHETIC)) != 0) {
+                    continue;
+                }
                 final AnnotationNode matching = matchingAnnotation(method.visibleAnnotations, FORK, GATEWAY, "to");
                 if (matching == null) {
                     continue;
@@ -548,7 +619,7 @@ public final class BytecodeStripper {
             }
             final int slots = field.getOpcode() == Opcodes.PUTFIELD ? 2 : 1;
             final int start = findValueStart(insns, t - 1, slots);
-            if (start < 0) {
+            if (start < 0 || !selfContained(method, insns, start, t)) {
                 result.info("Could not remove the initializer of " + owner.replace('/', '.')
                         + "#" + fieldName + " automatically");
                 continue;
@@ -559,6 +630,64 @@ public final class BytecodeStripper {
             t = start;
             dirty.add(owner);
         }
+    }
+
+    /**
+     * A removable initializer block must not contain labels that are
+     * referenced from outside the block. Line number markers inside a
+     * multi-line initializer expression are safe - a branch into the block,
+     * an exception range or a local variable range crossing it is not.
+     */
+    private boolean selfContained(final MethodNode method, final List<AbstractInsnNode> insns,
+                                  final int start, final int end) {
+        final Set<LabelNode> inner = new HashSet<>();
+        for (int i = start; i < end; i++) {
+            final AbstractInsnNode insn = insns.get(i);
+            if (insn instanceof JumpInsnNode || insn instanceof TableSwitchInsnNode
+                    || insn instanceof LookupSwitchInsnNode) {
+                return false;
+            }
+            if (insn instanceof LabelNode) {
+                inner.add((LabelNode) insn);
+            }
+        }
+        if (inner.isEmpty()) {
+            return true;
+        }
+        for (final AbstractInsnNode insn : insns) {
+            if (insn instanceof JumpInsnNode && inner.contains(((JumpInsnNode) insn).label)) {
+                return false;
+            }
+            if (insn instanceof TableSwitchInsnNode) {
+                final TableSwitchInsnNode sw = (TableSwitchInsnNode) insn;
+                if (inner.contains(sw.dflt) || sw.labels.stream().anyMatch(inner::contains)) {
+                    return false;
+                }
+            }
+            if (insn instanceof LookupSwitchInsnNode) {
+                final LookupSwitchInsnNode sw = (LookupSwitchInsnNode) insn;
+                if (inner.contains(sw.dflt) || sw.labels.stream().anyMatch(inner::contains)) {
+                    return false;
+                }
+            }
+            if (insn instanceof LineNumberNode
+                    && inner.contains(((LineNumberNode) insn).start)
+                    && (insns.indexOf(insn) < start || insns.indexOf(insn) >= end)) {
+                return false;
+            }
+        }
+        for (final TryCatchBlockNode block : method.tryCatchBlocks) {
+            if (inner.contains(block.start) || inner.contains(block.end)
+                    || inner.contains(block.handler)) {
+                return false;
+            }
+        }
+        for (final LocalVariableNode local : method.localVariables) {
+            if (inner.contains(local.start) || inner.contains(local.end)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -590,12 +719,16 @@ public final class BytecodeStripper {
 
     /**
      * Stack effect (pops, pushes) of an instruction, or null if the
-     * instruction cannot be handled safely, e.g. branches or labels.
+     * instruction cannot be handled safely, e.g. branches. Labels are line
+     * number markers in a straight-line initializer - the safety of
+     * removing across them is checked separately by
+     * {@link #selfContained(MethodNode, List, int, int)}.
      */
     private int[] stackEffect(final AbstractInsnNode insn) {
         final int opcode = insn.getOpcode();
         if (opcode < 0) {
-            if (insn instanceof LineNumberNode || insn instanceof FrameNode) {
+            if (insn instanceof LineNumberNode || insn instanceof FrameNode
+                    || insn instanceof LabelNode) {
                 return new int[]{0, 0};
             }
             return null;

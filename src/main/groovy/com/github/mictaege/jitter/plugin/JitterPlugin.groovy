@@ -29,7 +29,6 @@ class JitterPlugin implements Plugin<Project>  {
 
         project.afterEvaluate({ ->
             def stripTasks = []
-            def lateStripTasks = []
             def scopedVerifyTasks = [:]
             def allClassesDirs = [] as Set
 
@@ -39,35 +38,19 @@ class JitterPlugin implements Plugin<Project>  {
                 if (!project.jitter.excludeSrcSets.contains(srcSet.name)) {
                     def stripTask = project.task("jitterStrip${srcSet.name.capitalize()}", type: JitterStripTask)
                     stripTask.classesDirs = srcSet.output.classesDirs.files
+                    stripTask.templateClasspath = srcSet.compileClasspath
                     stripTask.dependsOn srcSet.compileJavaTaskName
                     stripTasks << stripTask
 
-                    if (project.jitter.lateStripSrcSets.contains(srcSet.name)) {
-                        // Late stripping: other source sets of the project
-                        // compile their full 150% model against the full
-                        // classes of this source set, so the stripping must
-                        // wait for their compilations and run before the
-                        // artifacts and tests. Only the main compilation
-                        // can be waited for: with the Kotlin plugin the
-                        // downstream compilations consume the jar, which
-                        // needs the stripped classes first - waiting for
-                        // those would be a task graph cycle. Test code that
-                        // references flavour specific classes of a late
-                        // source set must follow the usual convention and
-                        // be gated itself.
-                        def mainCompile = project.tasks.findByName('compileJava')
-                        if (mainCompile != null) {
-                            stripTask.mustRunAfter mainCompile
-                        }
-                        lateStripTasks << stripTask
-                    } else {
-                        // Wire the stripping into the classes task of the
-                        // source set, so that every consumer of the output
-                        // (downstream source sets, jars, wars, tests, run
-                        // tasks) sees the stripped classes.
-                        project.tasks.named(srcSet.classesTaskName).configure {
-                            it.dependsOn stripTask
-                        }
+                    // Wire the stripping into the classes task of the
+                    // source set, so that every consumer of the output
+                    // (downstream source sets, jars, wars, tests, run
+                    // tasks) sees the stripped classes. Source sets that
+                    // compile against the full 150% model of another
+                    // source set must be merged into that source set or
+                    // excluded from the stripping.
+                    project.tasks.named(srcSet.classesTaskName).configure {
+                        it.dependsOn stripTask
                     }
 
                     // A scoped verify checks only the classes of its own source
@@ -91,17 +74,12 @@ class JitterPlugin implements Plugin<Project>  {
 
                 project.tasks.withType(Test).configureEach { it.dependsOn verifyTask }
                 project.tasks.withType(JavaExec).configureEach { it.dependsOn verifyTask }
-                if (!lateStripTasks.isEmpty()) {
-                    project.tasks.withType(Test).configureEach { it.dependsOn lateStripTasks }
-                    project.tasks.withType(JavaExec).configureEach { it.dependsOn lateStripTasks }
-                }
                 project.tasks.withType(Jar).configureEach { jarTask ->
                     if (jarTask.name == 'jar' || jarTask.name == 'war') {
                         def mainVerify = scopedVerifyTasks['main']
                         if (mainVerify != null) {
                             jarTask.dependsOn mainVerify
                         }
-                        jarTask.dependsOn lateStripTasks
                     }
                 }
             }

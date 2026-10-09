@@ -16,15 +16,20 @@ class JitterStripTask extends DefaultTask {
     @Internal
     Set<File> classesDirs = []
 
+    /** Classpath for @Alter templates that live in dependent libraries. */
+    @Internal
+    org.gradle.api.file.FileCollection templateClasspath
+
     @Internal
     StripResult stripResult = new StripResult()
 
     @TaskAction
     void run() {
         def stripper = new BytecodeStripper()
+        def templateClasspathFiles = templateClasspath == null ? [] : templateClasspath.files as List
         classesDirs.each { dir ->
             if (dir.exists()) {
-                def result = stripper.strip(dir.toPath())
+                def result = stripper.strip(dir.toPath(), templateClasspathFiles)
                 stripResult.merge(result)
             }
         }

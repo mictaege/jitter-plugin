@@ -333,6 +333,56 @@ public class BytecodeStripperTest {
     }
 
     @Test
+    void removesBuilderChainInitializersOfRemovedStaticFields() throws Exception {
+        final Path classes = compile("test/Maps.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public class Maps {\n"
+                        + "  enum Dest { MS, NOV }\n"
+                        + "  @OnlyIf(\"ESA\")\n"
+                        + "  static final String ACTIVE = new StringBuilder()\n"
+                        + "      .append(Dest.MS.toString()).toString();\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  static final String INACTIVE = new StringBuilder()\n"
+                        + "      .append(Dest.MS.toString()).append(Dest.NOV.toString()).toString();\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode maps = read(classes, "test/Maps");
+        assertThat(field(maps, "ACTIVE"), is(not(nullValue())));
+        assertThat(field(maps, "INACTIVE"), is(nullValue()));
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+    }
+
+    @Test
+    void resolvesAltClassTemplatesFromTheClasspath() throws Exception {
+        final Path templateClasses = compile("lib/Template.java",
+                "package lib;\n"
+                        + "public class Template {\n"
+                        + "  public String name() { return \"template\"; }\n"
+                        + "}\n");
+        final Path classes = compile("test/Target.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Alter;\n"
+                        + "@Alter(with = \"lib.Template\", ifActive = \"ESA\")\n"
+                        + "public class Target {\n"
+                        + "  public String name() { throw new UnsupportedOperationException(); }\n"
+                        + "}\n");
+
+        new BytecodeStripper().strip(classes, java.util.Collections.singletonList(templateClasses.toFile()));
+
+        final ClassNode target = read(classes, "test/Target");
+        final Optional<org.objectweb.asm.tree.MethodNode> name = target.methods.stream()
+                .filter(m -> m.name.equals("name")).findFirst();
+        assertThat(name.isPresent(), is(true));
+        assertThat(bytecode(name.get()).contains("template"), is(true));
+    }
+
+    @Test
     void removesLambdaBodiesOfRemovedMethods() throws Exception {
         final Path classes = compile("test/LambdaHolder.java",
                 "package test;\n"
