@@ -435,6 +435,152 @@ three real-world gaps; all fixed in the plugin:
   template.
 - Plugin suite: 42 tests green.
 
+## Two-artifact design: stripping is the default (2026-10)
+
+Option b implemented: the flavour-stripped model is what the build outputs,
+and the full 150% model lives only where compilation needs it. The interim
+mode duality (`-PjitterBcStrip` vs plain full-model builds) is gone.
+
+**Per module:**
+- `compileJava` compiles the full 150% sources into the untouched classes
+  directories. Same-build downstream modules compile against those classes
+  directories (Gradle's `classes` outgoing variant of `apiElements`) - so
+  the full model is what every compile sees, in every flavour.
+- `jitterStripMain` writes the stripped model to
+  `build/jitter-stripped/<srcSet>` instead of mutating the classes in place
+  (declared `@InputFiles`/`@OutputDirectory`, so the task is incremental;
+  no more stale classes directories, no clean-before-mode-switch).
+- `jitterJar` packs stripped classes + processed resources into
+  `build/jitter-libs/<name>.jar` and replaces the `runtimeElements` artifact:
+  wars, `installOlogis`, test runtime and every other runtime consumer get
+  the flavour variant. The standard `jar` (full model) remains the
+  compile artifact and carries the test fixtures.
+- War projects get their classpath overridden to
+  stripped classes + resources + runtimeClasspath, so `WEB-INF/classes`
+  and `WEB-INF/lib` both carry the flavour model.
+- Test/integrationTest source sets are stripped to their own output
+  directories as well, and the source set output points at the stripped
+  tree (test tasks pick it up from there). This was the last in-place
+  remnant: in-place-stripped test classes lose their annotations, so the
+  next flavour switch stripped nothing and the previous flavour's test
+  model leaked into the verify - flavour switches without a clean broke
+  every build after the first one. With output-dir strips a flavour
+  switch simply re-strips the untouched compiled classes (validated:
+  Mpk -> Bmx -> Dba -> Mpk without clean, all green).
+- Consumers of another module's test output must be pointed at that
+  module's full compiled classes for their own compilation
+  (ologis: `mpk-cc-itest-bdd` compiles against `compileIntegrationTestJava`
+  of `ologis-itest-bdd` instead of its `integrationTest.output`, which is
+  the stripped tree now).
+- `testFixtures` is stripped as well, with the full jar staying the compile
+  artifact (`testFixturesApiElements`) and the stripped
+  `jitterTestFixturesJar` replacing the `testFixturesRuntimeElements`
+  artifact - test code running against the deployed flavour model must
+  see the same @Alter/@Fork/@OnlyIf transformations as the application
+  (see "Full pipeline validated").
+- `jitterVerifyMain` checks the stripped tree; the aggregate `jitterVerify`
+  scans the stripped main tree plus the test classes, so the convention
+  (tests of gated code must be gated) is enforced for code that was never
+  flavour-built before.
+
+**ologis**: `buildSrc/jitter.gradle` carries no mode wiring anymore - only
+flavours and critical terms. The known trap so far: a stripper change does
+not invalidate up-to-date `jitterStrip*` outputs (the plugin classes are
+not task inputs), so a full clean is needed after plugin changes.
+
+### Stripper gaps found by the first full-strip builds (all fixed, tested)
+
+1. **`$deserializeLambda$`**: javac's synthetic lambda deserializer
+   references ALL lambda implementations - also those of removed methods -
+   by name and bootstrap handle. The case blocks of removed lambdas are
+   now excised and their switch entries fall through to the default
+   ("Invalid lambda deserialization") branch. Switch entries must not be
+   removed - a table switch derives its keys from the index range.
+2. **Lambda ownership**: `lambda$<method>$N` names are per-class counters,
+   so overloads of the same method name share the prefix - the old prefix
+   sweep removed surviving overloads' lambdas. Removal is now
+   reference-based: a lambda of a removed method is one that no surviving
+   method references anymore (fixpoint over invokedynamic bootstrap
+   handles, `$deserializeLambda$` excluded; nested lambdas covered).
+3. **Array initializer stores**: the backward store scan needed
+   `AASTORE`/`IALOAD`-family effects and `ANEWARRAY`/`NEWARRAY` as
+   count-popping (with them, e.g. `NATURAL_FIELD_ORDER_BMX`-style
+   `new String[]{Enum.name(), ...}` initializers of removed fields
+   remove cleanly, including the producing `aload_0`/`iconst`).
+4. Also added: `ACONST_NULL`, `BIPUSH`, `SIPUSH` effects.
+
+### Verified (2026-10-09)
+
+- ologis `compileAll` green in Dba, Mpk and Bmx - every module stripped
+  and verified for the first time (ologis-api, ologis-contracts,
+  ologis-contracts-facade, ologis-impl-webui, ...).
+- Runtime artifacts flavour-correct in all three flavours (spot checks):
+  Dba - `VKPriceImportJob` and its bundle absent from the ologis-api
+  stripped jar, sitefs classes absent, mfr connectivity present; Mpk -
+  sitefs classes present (10), `VKPriceImportJob` + renamed bundle
+  present, mfr absent; Bmx - all Mpk/Dba-only content absent.
+- The `ologis-impl-webui` war: `WEB-INF/classes` stripped own classes
+  (all Mpk view code absent in Dba), `WEB-INF/lib` the 108 stripped
+  project jars. The original `buildLocalDevEnv` failure cause
+  (payara loading `VKPriceImportJob` in Dba/Bmx) is gone from the
+  deployment artifact.
+- Plugin suite: 54 tests green.
+
+### Known follow-ups (superseded by "Full pipeline validated" below)
+
+- No dangling-resource follow-ups: the suffixed bundles follow the base
+  + variant pattern (base ships in the other flavours, the active flavour's
+  variant replaces it, e.g. `Customer.properties` + `Customer_Mpk.properties`),
+  or come with flavour variant sets for all three flavours, or belong to
+  flavour-gated classes whose bundle ships with the class
+  (`VKPriceImportJob`). Verified during the first deployment tests.
+- eval.jitter re-validation pending.
+- Publishing: runtimeElements (stripped) vs apiElements/full jar would
+  need a classifier/capability scheme for Maven consumers.
+
+### Full pipeline validated (2026-10-10)
+
+`clean buildLocalDevEnv` (war, payara deployment, liquibase, dbunit dumps)
+green in **Dba, Mpk and Bmx** - the first full deployment of flavour
+variants from bytecode stripping. Three more real-world gaps surfaced on
+the way and are fixed:
+
+1. **Per-directory strip broke mixed source sets**: the strip ran per
+   classes directory, but a mixed Java/Kotlin source set spreads package
+   gates (package-info), classes and cross references over several
+   directories - the Kotlin pass saw no gates and copied everything.
+   All classes directories of a source set are now stripped as ONE unit
+   (`strip(List<Path>, ...)`); the frontend modules (`ologis-user-ui`)
+   were the first with real Kotlin+Java packages (`goodsreceiptpck`).
+2. **`$deserializeLambda$` rework**: removing the case blocks left stale
+   stack map frames / violated maxStack ("StackMapTable format error",
+   "Operand stack overflow" at deployment, javap misses both). The case
+   of a removed lambda now keeps its structure and only its invokedynamic
+   is replaced with the standard "Invalid lambda deserialization"
+   failure (+3 maxStack). The name-matching case stays - the lambda name
+   is a plain string, not a member reference.
+3. **Fork arity**: `additionalQuantities(2 args)` forking to a
+   `doNothing()` template shrank the gateway below its own argument
+   count ("Arguments can't fit into locals"). Fork now takes the max of
+   gateway and template maxStack/maxLocals.
+4. **Test fixtures runtime variant** (the former "still open" gap):
+   `OutputResourceTestDataGenerator` (@Alter per flavour) ran as the full
+   150% model against the stripped deployment - `NoSuchFieldError
+   EPOST_EXCHANGE`. Test fixtures are now stripped as well; the stripped
+   `jitterTestFixturesJar` replaces the `testFixturesRuntimeElements`
+   artifact while `testFixturesApiElements` keeps the full jar for
+   downstream itest compilation (EXCLUDE for the colliding
+   package-infos, as in the old jar).
+
+Also fixed: the itest cross-module compile dependency in ologis
+(`mpk-cc-itest-bdd` compiles against the full `compileIntegrationTestJava`
+output of `ologis-itest-bdd` via task references - direct source set
+output references hit Gradle's implicit-dependency validation).
+
+Operationally: a failed deploy leaves the payara domain running, which
+blocks the next `restore-domain` - stop the domain before re-running
+`buildLocalDevEnv` after a failure.
+
 ## Annotation-gated resources (2026-10): one mechanism for classes and resources
 
 Closes the last gap of the suffix convention: XML resources can now carry
