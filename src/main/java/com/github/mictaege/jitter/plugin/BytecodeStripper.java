@@ -92,7 +92,7 @@ public final class BytecodeStripper {
      * reports what has been removed.
      */
     public StripResult strip(final Path classesDir) throws IOException {
-        return strip(classesDir, java.util.Collections.emptyList());
+        return strip(classesDir, null, java.util.Collections.emptyList());
     }
 
     /**
@@ -103,24 +103,59 @@ public final class BytecodeStripper {
      */
     public StripResult strip(final Path classesDir, final List<java.io.File> templateClasspath)
             throws IOException {
+        return strip(classesDir, null, templateClasspath);
+    }
+
+    /**
+     * Strips all class files of the given source directory and reports what
+     * has been removed. With a target directory the source stays untouched:
+     * the stripped model is written to the target instead (all surviving
+     * classes, i.e. a complete classes tree), so that the full model can
+     * remain available for compilation while the target serves packaging
+     * and runtime. Without a target directory the source is stripped in
+     * place.
+     */
+    public StripResult strip(final Path sourceDir, final Path targetDir,
+                             final List<java.io.File> templateClasspath)
+            throws IOException {
+        return strip(java.util.Collections.singletonList(sourceDir), targetDir, templateClasspath);
+    }
+
+    /**
+     * Strips all class files of the given source directories as ONE unit
+     * and reports what has been removed. A source set of a mixed Java/Kotlin
+     * project compiles into several classes directories: the flavour gates
+     * of a package (its package-info), its classes and their cross
+     * references span all of them, so the directories must be stripped
+     * together - a per-directory strip would not see the gates of the
+     * others. With a target directory the sources stay untouched (see
+     * above); without one every source is stripped in place.
+     */
+    public StripResult strip(final List<Path> sourceDirs, final Path targetDir,
+                             final List<java.io.File> templateClasspath)
+            throws IOException {
         final StripResult result = new StripResult();
         final Map<String, ClassNode> nodes = new HashMap<>();
         final Map<String, Path> paths = new HashMap<>();
         final Set<String> dirty = new HashSet<>();
 
-        loadClasses(classesDir, nodes, paths);
+        for (final Path dir : sourceDirs) {
+            loadClasses(dir, nodes, paths);
+        }
 
         removePackages(nodes, result, dirty);
         applyAltclasses(nodes, result, dirty, templateClasspath);
         applyForkMethods(nodes, result, dirty);
         rewriteEnums(nodes, result, dirty);
-        removeOnlyIf(nodes, result, dirty);
+        final Map<String, List<String[]>> removedLambdas = new java.util.HashMap<>();
+        removeOnlyIf(nodes, result, dirty, removedLambdas);
+        cleanDeserializeLambda(nodes, dirty, removedLambdas);
         removeFieldInitializers(nodes, result, dirty);
         removeOrphanedSynthetics(nodes, result, dirty);
         cleanSwitchMaps(nodes, result, dirty);
         cleanAnnotations(nodes, dirty);
 
-        writeBack(classesDir, nodes, paths, dirty, result);
+        writeBack(sourceDirs, targetDir, nodes, paths, dirty, result);
         return result;
     }
 
@@ -293,8 +328,11 @@ public final class BytecodeStripper {
                 method.localVariables = alt.localVariables;
                 method.visibleLocalVariableAnnotations = alt.visibleLocalVariableAnnotations;
                 method.invisibleLocalVariableAnnotations = alt.invisibleLocalVariableAnnotations;
-                method.maxStack = alt.maxStack;
-                method.maxLocals = alt.maxLocals;
+                // the template may have a different arity than the gateway
+                // (e.g. a doNothing() template): the gateway's own arguments
+                // always need their locals, so never shrink below them
+                method.maxStack = Math.max(method.maxStack, alt.maxStack);
+                method.maxLocals = Math.max(method.maxLocals, alt.maxLocals);
                 method.exceptions.clear();
                 method.exceptions.addAll(alt.exceptions);
                 node.methods.remove(alt);
@@ -501,7 +539,8 @@ public final class BytecodeStripper {
     }
 
     private void removeOnlyIf(final Map<String, ClassNode> nodes, final StripResult result,
-                              final Set<String> dirty) {
+                              final Set<String> dirty,
+                              final Map<String, List<String[]>> removedLambdas) {
         for (final ClassNode node : new ArrayList<>(nodes.values())) {
             final List<String> flavours = onlyIfFlavours(node);
             if (flavours != null && flavours.stream().noneMatch(JitterUtil::active)) {
@@ -531,16 +570,119 @@ public final class BytecodeStripper {
                 return false;
             });
             if (!lambdaPrefixes.isEmpty()) {
-                node.methods.removeIf(method -> {
-                    for (final String prefix : lambdaPrefixes) {
-                        if (method.name.startsWith(prefix)) {
-                            result.removedMember(memberKey(node.name, method.name, method.desc));
-                            result.info("Remove lambda " + node.name.replace('/', '.') + "#" + method.name);
-                            return true;
+                // The lambda methods are named lambda$<enclosingMethod>$N with a
+                // per-class counter, so overloads of the same method name share
+                // the prefix - ownership cannot be decided by name. Instead:
+                // a lambda of a removed method is exactly one that no surviving
+                // method references via an invokedynamic bootstrap handle
+                // anymore ($deserializeLambda$ excluded, it is cleaned below).
+                // Lambda methods of surviving code count as well, since lambdas
+                // nest: the outer lambda is the only reference of the inner one.
+                final Set<String> keep = new java.util.HashSet<>();
+                boolean changed = true;
+                while (changed) {
+                    changed = false;
+                    for (final MethodNode survivor : node.methods) {
+                        if (survivor.name.startsWith("lambda$") && !keep.contains(survivor.name + survivor.desc)) {
+                            continue;
                         }
+                        if ("$deserializeLambda$".equals(survivor.name)) {
+                            continue;
+                        }
+                        for (final AbstractInsnNode insn : survivor.instructions) {
+                            if (insn instanceof InvokeDynamicInsnNode) {
+                                for (final Object arg : ((InvokeDynamicInsnNode) insn).bsmArgs) {
+                                    if (arg instanceof org.objectweb.asm.Handle
+                                            && ((org.objectweb.asm.Handle) arg).getOwner().equals(node.name)) {
+                                        final org.objectweb.asm.Handle handle = (org.objectweb.asm.Handle) arg;
+                                        final String key = handle.getName() + handle.getDesc();
+                                        if (keep.add(key)) {
+                                            changed = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                node.methods.removeIf(method -> {
+                    if (method.name.startsWith("lambda$") && !keep.contains(method.name + method.desc)) {
+                        result.removedMember(memberKey(node.name, method.name, method.desc));
+                        result.info("Remove lambda " + node.name.replace('/', '.') + "#" + method.name);
+                        removedLambdas
+                                .computeIfAbsent(node.name, k -> new ArrayList<>())
+                                .add(new String[]{method.name, method.desc});
+                        return true;
                     }
                     return false;
                 });
+            }
+        }
+    }
+
+    /**
+     * javac generates a synthetic {@code $deserializeLambda$} method for
+     * every class with lambdas. It references ALL lambda implementations
+     * of the class by name and by bootstrap method handle, also the ones
+     * of the flavour specific methods that were just removed. The case
+     * blocks of the removed lambdas are dead without their methods and
+     * would keep dangling references, so they are removed together with
+     * their switch entries.
+     */
+    private void cleanDeserializeLambda(final Map<String, ClassNode> nodes,
+                                        final Set<String> dirty,
+                                        final Map<String, List<String[]>> removedLambdas) {
+        for (final Map.Entry<String, List<String[]>> entry : removedLambdas.entrySet()) {
+            final ClassNode node = nodes.get(entry.getKey());
+            if (node == null) {
+                continue;
+            }
+            for (final MethodNode method : node.methods) {
+                if (!"$deserializeLambda$".equals(method.name)) {
+                    continue;
+                }
+                for (final String[] lambda : entry.getValue()) {
+                    neutralizeLambdaCase(method, lambda[0], lambda[1]);
+                }
+                dirty.add(entry.getKey());
+            }
+        }
+    }
+
+    /**
+     * The case block of the removed lambda keeps its structure - only the
+     * invokedynamic with its bootstrap handle to the removed method is the
+     * dangling reference. Replacing it with the "Invalid lambda
+     * deserialization" failure leaves all frames and branches of the
+     * deserializer untouched, and deserializing a removed lambda behaves
+     * exactly like deserializing an unknown one. The name matching case
+     * of the first switch stays as well: it carries the lambda name as a
+     * plain string, which is no member reference.
+     */
+    private void neutralizeLambdaCase(final MethodNode method, final String name, final String desc) {
+        for (final AbstractInsnNode insn : method.instructions) {
+            if (!(insn instanceof InvokeDynamicInsnNode)) {
+                continue;
+            }
+            for (final Object arg : ((InvokeDynamicInsnNode) insn).bsmArgs) {
+                if (arg instanceof org.objectweb.asm.Handle
+                        && ((org.objectweb.asm.Handle) arg).getName().equals(name)
+                        && ((org.objectweb.asm.Handle) arg).getDesc().equals(desc)) {
+                    final AbstractInsnNode areturn = insn.getNext();
+                    if (areturn == null || areturn.getOpcode() != Opcodes.ARETURN) {
+                        continue;
+                    }
+                    // NEW + DUP + LDC needs up to three more stack slots
+                    // than the original invokedynamic sequence
+                    method.maxStack = method.maxStack + 3;
+                    method.instructions.set(insn, new TypeInsnNode(Opcodes.NEW,
+                            "java/lang/IllegalArgumentException"));
+                    method.instructions.insertBefore(areturn, new InsnNode(Opcodes.DUP));
+                    method.instructions.insertBefore(areturn, new LdcInsnNode("Invalid lambda deserialization"));
+                    method.instructions.insertBefore(areturn, new MethodInsnNode(Opcodes.INVOKESPECIAL,
+                            "java/lang/IllegalArgumentException", "<init>", "(Ljava/lang/String;)V", false));
+                    method.instructions.set(areturn, new InsnNode(Opcodes.ATHROW));
+                }
             }
         }
     }
@@ -739,6 +881,10 @@ public final class BytecodeStripper {
         if (opcode >= Opcodes.ICONST_0 && opcode <= Opcodes.DCONST_1) {
             return new int[]{0, wide(opcode)};
         }
+        if (opcode == Opcodes.ACONST_NULL || opcode == Opcodes.BIPUSH
+                || opcode == Opcodes.SIPUSH) {
+            return new int[]{0, 1};
+        }
         if (insn instanceof LdcInsnNode) {
             final Object cst = ((LdcInsnNode) insn).cst;
             final boolean wide = cst instanceof Long || cst instanceof Double;
@@ -758,6 +904,23 @@ public final class BytecodeStripper {
         }
         if (opcode == Opcodes.NEW || opcode == Opcodes.DUP) {
             return new int[]{0, 1};
+        }
+        if (opcode == Opcodes.ANEWARRAY || opcode == Opcodes.NEWARRAY) {
+            // pops the element count, pushes the array
+            return new int[]{1, 1};
+        }
+        if (opcode == Opcodes.ARRAYLENGTH) {
+            return new int[]{1, 1};
+        }
+        if (opcode >= Opcodes.IALOAD && opcode <= Opcodes.SALOAD) {
+            // array reads: pops index and arrayref, pushes the element
+            // (long and double elements take two slots)
+            return new int[]{2, (opcode == Opcodes.LALOAD || opcode == Opcodes.DALOAD) ? 2 : 1};
+        }
+        if (opcode >= Opcodes.IASTORE && opcode <= Opcodes.SASTORE) {
+            // array writes: pops value, index and arrayref
+            // (long and double values take two slots)
+            return new int[]{(opcode == Opcodes.LASTORE || opcode == Opcodes.DASTORE) ? 4 : 3, 0};
         }
         if (opcode == Opcodes.CHECKCAST || opcode == Opcodes.INSTANCEOF) {
             return new int[]{1, 1};
@@ -1003,30 +1166,75 @@ public final class BytecodeStripper {
         }
     }
 
-    private void writeBack(final Path classesDir, final Map<String, ClassNode> nodes,
+    private void writeBack(final List<Path> sourceDirs, final Path targetDir, final Map<String, ClassNode> nodes,
                            final Map<String, Path> paths, final Set<String> dirty,
                            final StripResult result) throws IOException {
+        if (targetDir == null) {
+            writeBackInPlace(sourceDirs, nodes, paths, dirty, result);
+        } else {
+            writeStrippedTree(targetDir, nodes, paths, dirty);
+        }
+        result.getInfos().forEach(msg -> log().info(msg));
+    }
+
+    private void writeBackInPlace(final List<Path> classesDirs, final Map<String, ClassNode> nodes,
+                                  final Map<String, Path> paths, final Set<String> dirty,
+                                  final StripResult result) throws IOException {
         for (final String removed : result.getRemovedClasses()) {
             final Path file = paths.get(removed);
             if (file != null) {
                 Files.deleteIfExists(file);
-                deleteEmptyParents(classesDir, file.getParent());
+                final Path root = rootOf(classesDirs, file);
+                if (root != null) {
+                    deleteEmptyParents(root, file.getParent());
+                }
             }
         }
         for (final String name : dirty) {
             final ClassNode node = nodes.get(name);
-            if (node == null) {
+            if (node == null || !paths.containsKey(name)) {
                 continue;
             }
             final ClassWriter writer = new ClassWriter(0);
             node.accept(writer);
-            final Path file = paths.containsKey(name)
-                    ? paths.get(name)
-                    : classesDir.resolve(name.replace('/', java.io.File.separatorChar) + ".class");
+            final Path file = paths.get(name);
             Files.createDirectories(file.getParent());
             Files.write(file, writer.toByteArray());
         }
-        result.getInfos().forEach(msg -> log().info(msg));
+    }
+
+    private Path rootOf(final List<Path> classesDirs, final Path file) {
+        Path best = null;
+        for (final Path dir : classesDirs) {
+            if (file.startsWith(dir) && (best == null || dir.toString().length() > best.toString().length())) {
+                best = dir;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Writes the complete stripped model into the target directory: dirty
+     * nodes serialized, untouched classes copied, removed classes left out.
+     * The source directories stay as they are.
+     */
+    private void writeStrippedTree(final Path targetDir,
+                                   final Map<String, ClassNode> nodes, final Map<String, Path> paths,
+                                   final Set<String> dirty) throws IOException {
+        for (final Map.Entry<String, ClassNode> entry : nodes.entrySet()) {
+            final String name = entry.getKey();
+            final Path file = targetDir.resolve(
+                    name.replace('/', java.io.File.separatorChar) + ".class");
+            Files.createDirectories(file.getParent());
+            if (dirty.contains(name)) {
+                final ClassWriter writer = new ClassWriter(0);
+                entry.getValue().accept(writer);
+                Files.write(file, writer.toByteArray());
+            } else {
+                final Path source = paths.get(name);
+                Files.copy(source, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
     }
 
     private void deleteEmptyParents(final Path root, Path dir) throws IOException {

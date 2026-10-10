@@ -333,6 +333,76 @@ public class BytecodeStripperTest {
     }
 
     @Test
+    void removesArrayInitializersOfRemovedInstanceFields() throws Exception {
+        final Path classes = compile("test/ArrayInitHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public class ArrayInitHolder {\n"
+                        + "  enum F { A, B, C }\n"
+                        + "  private final String[] keeper = new String[]{F.A.name()};\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  private final String[] nasa = new String[]{F.B.name(), \"x\", F.C.name()};\n"
+                        + "  public String first() { return keeper[0]; }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode holder = read(classes, "test/ArrayInitHolder");
+        assertThat(field(holder, "keeper"), is(not(nullValue())));
+        assertThat(field(holder, "nasa"), is(nullValue()));
+        final MethodNode init = method(holder, "<init>", "()V");
+        assertThat(bytecode(init).contains("nasa"), is(false));
+        assertThat(bytecode(init).contains("keeper"), is(true));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> holderClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.ArrayInitHolder");
+        final Object plain = holderClass.getMethod("first").invoke(holderClass.getDeclaredConstructor().newInstance());
+        assertThat(plain, is("A"));
+    }
+
+    @Test
+    void keepsLambdasOfSurvivingOverloads() throws Exception {
+        final Path classes = compile("test/OverloadHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "import java.util.function.Supplier;\n"
+                        + "public class OverloadHolder {\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  public String value(int i) {\n"
+                        + "    Supplier<String> s = () -> \"nasa\" + i;\n"
+                        + "    return s.get();\n"
+                        + "  }\n"
+                        + "  public String value() {\n"
+                        + "    Supplier<String> s = () -> \"esa\";\n"
+                        + "    return s.get();\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode holder = read(classes, "test/OverloadHolder");
+        assertThat(method(holder, "value", "(I)Ljava/lang/String;"), is(nullValue()));
+        assertThat(method(holder, "value", "()Ljava/lang/String;"), is(not(nullValue())));
+        assertThat(holder.methods.stream()
+                .filter(m -> m.name.startsWith("lambda$value")).count(), is(1L));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> holderClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.OverloadHolder");
+        final Object plain = holderClass.getMethod("value").invoke(holderClass.getDeclaredConstructor().newInstance());
+        assertThat(plain, is("esa"));
+    }
+
+    @Test
     void removesBuilderChainInitializersOfRemovedStaticFields() throws Exception {
         final Path classes = compile("test/Maps.java",
                 "package test;\n"
@@ -359,6 +429,40 @@ public class BytecodeStripperTest {
     }
 
     @Test
+    void writesStrippedModelToTargetDirLeavingSourceUntouched() throws Exception {
+        final Path classes = compile("test/Person.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public class Person {\n"
+                        + "  private String name;\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  private String nasaOnly;\n"
+                        + "  @OnlyIf(\"ESA\")\n"
+                        + "  public void esaConstructor() { }\n"
+                        + "}\n",
+                "test/NasaOnly.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "@OnlyIf(\"NASA\")\n"
+                        + "public class NasaOnly { }\n");
+
+        final Path target = workDir.resolve("stripped");
+        new BytecodeStripper().strip(classes, target, java.util.Collections.emptyList());
+
+        // the source keeps the full model
+        final ClassNode sourcePerson = read(classes, "test/Person");
+        assertThat(field(sourcePerson, "nasaOnly"), is(not(nullValue())));
+        assertThat(read(classes, "test/NasaOnly"), is(not(nullValue())));
+
+        // the target carries the stripped model
+        final ClassNode targetPerson = read(target, "test/Person");
+        assertThat(field(targetPerson, "nasaOnly"), is(nullValue()));
+        assertThat(method(targetPerson, "esaConstructor", "()V"), is(not(nullValue())));
+        assertThat(java.nio.file.Files.exists(
+                target.resolve("test/NasaOnly.class")), is(false));
+    }
+
+    @Test
     void resolvesAltClassTemplatesFromTheClasspath() throws Exception {
         final Path templateClasses = compile("lib/Template.java",
                 "package lib;\n"
@@ -380,6 +484,65 @@ public class BytecodeStripperTest {
                 .filter(m -> m.name.equals("name")).findFirst();
         assertThat(name.isPresent(), is(true));
         assertThat(bytecode(name.get()).contains("template"), is(true));
+    }
+
+    @Test
+    void cleansUpDeserializeLambdaOfRemovedLambdas() throws Exception {
+        final Path classes = compile("test/SerializableLambdaHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "import java.io.Serializable;\n"
+                        + "public class SerializableLambdaHolder {\n"
+                        + "  interface Greeting extends Serializable {\n"
+                        + "    String greet(String who);\n"
+                        + "  }\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  public String nasaOnly(String who) {\n"
+                        + "    Greeting g = who0 -> \"nasa:\" + who0;\n"
+                        + "    return g.greet(who);\n"
+                        + "  }\n"
+                        + "  public String plain(String who) {\n"
+                        + "    Greeting g = who0 -> \"esa:\" + who0;\n"
+                        + "    return g.greet(who);\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode holder = read(classes, "test/SerializableLambdaHolder");
+        assertThat(holder.methods.stream()
+                .filter(m -> m.name.startsWith("lambda$nasaOnly")).count(), is(0L));
+        assertThat(holder.methods.stream()
+                .filter(m -> m.name.startsWith("lambda$plain")).count(), is(1L));
+        final MethodNode deserializer = holder.methods.stream()
+                .filter(m -> m.name.equals("$deserializeLambda$")).findFirst().orElse(null);
+        assertThat(deserializer, is(not(nullValue())));
+        // the lambda name remains as a plain string; the bootstrap handle
+        // to the removed method is gone and the case throws the standard
+        // "Invalid lambda deserialization" failure
+        final java.util.List<org.objectweb.asm.Handle> handles = new java.util.ArrayList<>();
+        deserializer.instructions.forEach(i -> {
+            if (i instanceof org.objectweb.asm.tree.InvokeDynamicInsnNode) {
+                for (final Object arg : ((org.objectweb.asm.tree.InvokeDynamicInsnNode) i).bsmArgs) {
+                    if (arg instanceof org.objectweb.asm.Handle) {
+                        handles.add((org.objectweb.asm.Handle) arg);
+                    }
+                }
+            }
+        });
+        assertThat(handles.stream().filter(h -> h.getName().startsWith("lambda$nasaOnly")).count(), is(0L));
+        assertThat(handles.stream().filter(h -> h.getName().startsWith("lambda$plain")).count(), is(1L));
+        assertThat(bytecode(deserializer).contains("Invalid lambda deserialization"), is(true));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> holderClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.SerializableLambdaHolder");
+        final Object plain = holderClass.getMethod("plain", String.class).invoke(holderClass.getDeclaredConstructor().newInstance(), "x");
+        assertThat(plain, is("esa:x"));
     }
 
     @Test
