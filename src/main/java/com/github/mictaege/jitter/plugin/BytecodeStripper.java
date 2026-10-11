@@ -29,6 +29,7 @@ import org.objectweb.asm.tree.TableSwitchInsnNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
+import org.objectweb.asm.tree.IincInsnNode;
 import org.objectweb.asm.tree.InnerClassNode;
 
 import java.io.IOException;
@@ -157,6 +158,7 @@ public final class BytecodeStripper {
         cleanDeserializeLambda(nodes, dirty, removedLambdas);
         removeOrphanedSynthetics(nodes, result, dirty);
         cleanSwitchMaps(nodes, result, dirty);
+        cleanNestAttributes(nodes, result, dirty);
         cleanAnnotations(nodes, dirty);
 
         writeBack(sourceDirs, targetDir, nodes, paths, dirty, result);
@@ -456,12 +458,30 @@ public final class BytecodeStripper {
                     continue;
                 }
                 final String altName = annotationValue(matching, "to");
+                // overloaded gateways fork to same-named templates: the
+                // template with the gateway's own signature is the right
+                // one, and only if none matches the signature falls the
+                // lookup back to the name alone (a template may also have
+                // a different arity than its gateway, like a doNothing())
                 final MethodNode alt = node.methods.stream()
-                        .filter(m -> m != method && m.name.equals(altName))
-                        .findFirst().orElse(null);
+                        .filter(m -> m != method && m.name.equals(altName)
+                                && m.desc.equals(method.desc))
+                        .findFirst()
+                        .orElseGet(() -> node.methods.stream()
+                                .filter(m -> m != method && m.name.equals(altName))
+                                .findFirst().orElse(null));
                 if (alt == null) {
                     result.error("The given alternative method " + altName + " could not be found in "
                             + node.name.replace('/', '.'));
+                    continue;
+                }
+                if (((method.access ^ alt.access) & Opcodes.ACC_STATIC) != 0
+                        && !slotIndependent(alt) && !adaptSlots(alt, (method.access & Opcodes.ACC_STATIC) != 0)) {
+                    result.error("The gateway method " + node.name.replace('/', '.') + "#" + method.name
+                            + " and the alternative method " + altName + " use incompatible slot numbering"
+                            + " for a bytecode level body copy: an instance body reading this cannot"
+                            + " be copied into a static gateway, and a body with stack map frames"
+                            + " cannot be shifted");
                     continue;
                 }
                 method.instructions = alt.instructions;
@@ -1376,6 +1396,87 @@ public final class BytecodeStripper {
         if (!target.equals(referrer)) {
             refs.merge(target, 1, Integer::sum);
         }
+    }
+
+    /**
+     * Removing a nested class (anonymous inner classes, switch map or enum
+     * body classes) leaves stale entries in the surviving outer class: the
+     * {@code NestMembers} and {@code InnerClasses} attributes still name
+     * the removed class. Class loading tolerates that, but bytecode
+     * retransformation - e.g. Mockito's inline mock maker - fails with
+     * "attempted to change the class NestHost, NestMembers, Record, or
+     * PermittedSubclasses attribute" as soon as the runtime normalizes
+     * them. The entries of removed classes are therefore dropped.
+     */
+    private void cleanNestAttributes(final Map<String, ClassNode> nodes, final StripResult result,
+                                     final Set<String> dirty) {
+        for (final ClassNode node : nodes.values()) {
+            boolean changed = false;
+            if (node.nestMembers != null) {
+                changed |= node.nestMembers.removeIf(result.getRemovedClasses()::contains);
+            }
+            if (node.innerClasses != null) {
+                changed |= node.innerClasses.removeIf(
+                        inner -> result.getRemovedClasses().contains(inner.name));
+            }
+            if (changed) {
+                dirty.add(node.name);
+            }
+        }
+    }
+
+    /**
+     * A body copied between a static and an instance method works in the
+     * source transformation, because the recompile resolves the parameter
+     * references anew. As bytecode the slots differ by one - the instance
+     * method reserves slot 0 for this - so the template's local slot
+     * numbers are shifted accordingly. An instance template that reads
+     * this cannot be shifted into a static gateway, and template bodies
+     * with stack map frames are not re-encoded - both are rejected.
+     */
+    private boolean adaptSlots(final MethodNode template, final boolean gatewayStatic) {
+        final int delta = gatewayStatic ? -1 : 1;
+        for (final AbstractInsnNode insn : template.instructions) {
+            if (insn instanceof FrameNode) {
+                return false;
+            }
+            if (insn instanceof VarInsnNode) {
+                final VarInsnNode var = (VarInsnNode) insn;
+                if (var.var == 0 && delta < 0) {
+                    return false;
+                }
+                var.var += delta;
+            } else if (insn instanceof IincInsnNode) {
+                final IincInsnNode iinc = (IincInsnNode) insn;
+                if (iinc.var == 0 && delta < 0) {
+                    return false;
+                }
+                iinc.var += delta;
+            }
+        }
+        for (final LocalVariableNode local : template.localVariables) {
+            if (local.index == 0 && delta < 0) {
+                return false;
+            }
+            local.index += delta;
+        }
+        template.maxLocals += delta;
+        return true;
+    }
+
+    /**
+     * A body that loads no local variable slot at all reads neither this
+     * nor any argument, so the different slot numbering of static and
+     * instance methods does not matter - it can be copied in both
+     * directions (e.g. a flavour template that just returns a constant).
+     */
+    private boolean slotIndependent(final MethodNode method) {
+        for (final AbstractInsnNode insn : method.instructions) {
+            if (insn instanceof VarInsnNode || insn instanceof IincInsnNode) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

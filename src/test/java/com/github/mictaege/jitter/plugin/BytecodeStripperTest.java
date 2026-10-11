@@ -421,6 +421,176 @@ public class BytecodeStripperTest {
     }
 
     @Test
+    void forksOverloadedGatewaysToTheirSignatureMatchingTemplates() throws Exception {
+        final Path classes = compile("test/OverloadForkHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Fork;\n"
+                        + "public class OverloadForkHolder {\n"
+                        + "  @Fork(to = \"template\", ifActive = \"ESA\")\n"
+                        + "  public String value(final String s) { return \"gw-string\"; }\n"
+                        + "  @Fork(to = \"template\", ifActive = \"ESA\")\n"
+                        + "  public String value(final int i) { return \"gw-int\"; }\n"
+                        + "  public String template(final String s) { return \"template-string\"; }\n"
+                        + "  public String template(final int i) { return \"template-int\"; }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        // each overloaded gateway gets the body of the template with its own
+        // signature, not simply the first template of the same name
+        final ClassNode holder = read(classes, "test/OverloadForkHolder");
+        assertThat(bytecode(method(holder, "value", "(Ljava/lang/String;)Ljava/lang/String;"))
+                .contains("template-string"), is(true));
+        assertThat(bytecode(method(holder, "value", "(I)Ljava/lang/String;"))
+                .contains("template-int"), is(true));
+        assertThat(holder.methods.stream()
+                .filter(m -> m.name.equals("template")).count(), is(0L));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> holderClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.OverloadForkHolder");
+        final Object plain = holderClass.getDeclaredConstructor().newInstance();
+        assertThat(holderClass.getMethod("value", String.class).invoke(plain, "x"), is("template-string"));
+        assertThat(holderClass.getMethod("value", int.class).invoke(plain, 1), is("template-int"));
+    }
+
+    @Test
+    void cleansNestAttributesOfRemovedNestedClasses() throws Exception {
+        final Path classes = compile("test/NestHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public class NestHolder {\n"
+                        + "  public Runnable keeper() { return new Runnable() {\n"
+                        + "      public void run() { }\n"
+                        + "    }; }\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  public Runnable gated() { return new Runnable() {\n"
+                        + "      public void run() { }\n"
+                        + "    }; }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        // the anonymous class of the removed method is gone, and the
+        // surviving outer class no longer names it in its nest attributes
+        // (stale entries break bytecode retransformation, e.g. mocking)
+        assertThat(java.nio.file.Files.exists(classes.resolve("test/NestHolder$2.class")),
+                is(false));
+        final ClassNode holder = read(classes, "test/NestHolder");
+        assertThat(holder.nestMembers.contains("test/NestHolder$2"), is(false));
+        assertThat(holder.innerClasses.stream()
+                .anyMatch(inner -> inner.name.equals("test/NestHolder$2")), is(false));
+        assertThat(holder.nestMembers.contains("test/NestHolder$1"), is(true));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> holderClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.NestHolder");
+        final Object plain = holderClass.getDeclaredConstructor().newInstance();
+        assertThat(holderClass.getMethod("keeper").invoke(plain), is(not(nullValue())));
+    }
+
+    @Test
+    void rejectsInstanceForkBodyReadingThisForStaticGateway() throws Exception {
+        final Path classes = compile("test/StaticForkHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Fork;\n"
+                        + "public class StaticForkHolder {\n"
+                        + "  private final String field = System.getProperty(\"dbgf\", \"field\");\n"
+                        + "  @Fork(to = \"template\", ifActive = \"ESA\")\n"
+                        + "  public static String value() { throw new UnsupportedOperationException(); }\n"
+                        + "  private String template() { return field; }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        // an instance body reading this has no counterpart in a static
+        // gateway - the stripper must reject it with a clear error
+        assertThat(result.getErrors().isEmpty(), is(false));
+        assertThat(result.getErrors().get(0), is("The gateway method test.StaticForkHolder#value"
+                + " and the alternative method template use incompatible slot numbering"
+                + " for a bytecode level body copy: an instance body reading this cannot"
+                + " be copied into a static gateway, and a body with stack map frames"
+                + " cannot be shifted"));
+    }
+
+    @Test
+    void adaptsSlotNumberingWhenCopyingStaticTemplateIntoInstanceGateway() throws Exception {
+        final Path classes = compile("test/SlotForkHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Fork;\n"
+                        + "public class SlotForkHolder {\n"
+                        + "  @Fork(to = \"template\", ifActive = \"ESA\")\n"
+                        + "  public String value(final String prefix, final int nr) {\n"
+                        + "      throw new UnsupportedOperationException();\n"
+                        + "  }\n"
+                        + "  private static String template(final String prefix, final int nr) {\n"
+                        + "      return prefix + \"-\" + nr;\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        // the source transformation recompiled the static body into the
+        // instance gateway and re-resolved the parameters; the bytecode copy
+        // shifts the slots instead (instance slot 0 is this)
+        assertThat(result.getErrors().isEmpty(), is(true));
+        final ClassNode holder = read(classes, "test/SlotForkHolder");
+        assertThat(method(holder, "value", "(Ljava/lang/String;I)Ljava/lang/String;"),
+                is(not(nullValue())));
+        assertThat(holder.methods.stream()
+                .filter(m -> m.name.equals("template")).count(), is(0L));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> holderClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.SlotForkHolder");
+        final Object plain = holderClass.getDeclaredConstructor().newInstance();
+        assertThat(holderClass.getMethod("value", String.class, int.class)
+                .invoke(plain, "esa", 7), is("esa-7"));
+    }
+
+    @Test
+    void allowsStaticInstanceForkWithSlotIndependentBody() throws Exception {
+        final Path classes = compile("test/ConstantForkHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Fork;\n"
+                        + "public class ConstantForkHolder {\n"
+                        + "  @Fork(to = \"constantMpk\", ifActive = \"ESA\")\n"
+                        + "  public static String symbol() { throw new UnsupportedOperationException(); }\n"
+                        + "  private String constantMpk() { return \"constant-value\"; }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        // the instance template reads neither this nor an argument, so the
+        // slot numbering does not matter and the body may be copied into
+        // the static gateway (the common flavour-constant template shape)
+        assertThat(result.getErrors().isEmpty(), is(true));
+        final ClassNode holder = read(classes, "test/ConstantForkHolder");
+        assertThat(method(holder, "symbol", "()Ljava/lang/String;"), is(not(nullValue())));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> holderClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.ConstantForkHolder");
+        assertThat(holderClass.getMethod("symbol").invoke(null), is("constant-value"));
+    }
+
+    @Test
     void keepsLambdasOfSurvivingOverloads() throws Exception {
         final Path classes = compile("test/OverloadHolder.java",
                 "package test;\n"
