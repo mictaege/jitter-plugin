@@ -366,6 +366,61 @@ public class BytecodeStripperTest {
     }
 
     @Test
+    void removesLambdaInitializersOfRemovedFields() throws Exception {
+        final Path classes = compile("test/LambdaInitHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "import java.util.function.Supplier;\n"
+                        + "public class LambdaInitHolder {\n"
+                        + "  private final Supplier<String> keeper = () -> \"esa\";\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  private final Fixer nasa = new Fixer(dao()::get, () -> NasaOnly.stamp(\"nasa\"));\n"
+                        + "  public String kept() { return keeper.get(); }\n"
+                        + "  private Supplier<String> dao() { return () -> \"dao\"; }\n"
+                        + "  static class Fixer {\n"
+                        + "    final Supplier<String> bound;\n"
+                        + "    final Supplier<String> value;\n"
+                        + "    Fixer(final Supplier<String> bound, final Supplier<String> value) {\n"
+                        + "      this.bound = bound;\n"
+                        + "      this.value = value;\n"
+                        + "    }\n"
+                        + "  }\n"
+                        + "}\n",
+                "test/NasaOnly.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "@OnlyIf(\"NASA\")\n"
+                        + "public class NasaOnly {\n"
+                        + "  public static String stamp(final String s) { return s; }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode holder = read(classes, "test/LambdaInitHolder");
+        assertThat(field(holder, "keeper"), is(not(nullValue())));
+        assertThat(field(holder, "nasa"), is(nullValue()));
+        final MethodNode init = method(holder, "<init>", "()V");
+        assertThat(bytecode(init).contains("nasa"), is(false));
+        assertThat(bytecode(init).contains("keeper"), is(true));
+        // the lambdas of the removed initializer are gone (they referenced
+        // the removed NasaOnly class), the one of the surviving field stays
+        assertThat(holder.methods.stream()
+                .filter(m -> m.name.startsWith("lambda$new$")).count(), is(1L));
+        assertThat(holder.methods.stream()
+                .anyMatch(m -> bytecode(m).contains("NasaOnly")), is(false));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> holderClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.LambdaInitHolder");
+        final Object plain = holderClass.getMethod("kept").invoke(holderClass.getDeclaredConstructor().newInstance());
+        assertThat(plain, is("esa"));
+    }
+
+    @Test
     void keepsLambdasOfSurvivingOverloads() throws Exception {
         final Path classes = compile("test/OverloadHolder.java",
                 "package test;\n"
@@ -400,6 +455,140 @@ public class BytecodeStripperTest {
                 new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.OverloadHolder");
         final Object plain = holderClass.getMethod("value").invoke(holderClass.getDeclaredConstructor().newInstance());
         assertThat(plain, is("esa"));
+    }
+
+    @Test
+    void rebakesInlinedAnnotationConstantsOfAlteredConstantsClasses() throws Exception {
+        final Path classes = compile(
+                "test/TableNames.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Alter;\n"
+                        + "import java.lang.annotation.Retention;\n"
+                        + "import java.lang.annotation.RetentionPolicy;\n"
+                        + "@Retention(RetentionPolicy.RUNTIME)\n"
+                        + "@interface TableRef { String name(); }\n"
+                        + "@Retention(RetentionPolicy.RUNTIME)\n"
+                        + "@interface ColumnRefs { String[] names(); }\n"
+                        + "@Alter(with = \"TableNamesEsa\", ifActive = \"ESA\")\n"
+                        + "public class TableNames {\n"
+                        + "  public static final String JOB = \"TableNames.JOB\";\n"
+                        + "  public static final String TELE = \"TableNames.TELE\";\n"
+                        + "  public static final String DUP_A = \"ambiguous\";\n"
+                        + "  public static final String DUP_B = \"ambiguous\";\n"
+                        + "}\n",
+                "test/TableNamesEsa.java",
+                "package test;\n"
+                        + "public class TableNamesEsa {\n"
+                        + "  public static final String JOB = \"ESA_JOB\";\n"
+                        + "  public static final String TELE = \"ESA_TELE\";\n"
+                        + "  public static final String DUP_A = \"ESA_DUP_A\";\n"
+                        + "}\n",
+                "test/JobEntity.java",
+                "package test;\n"
+                        + "public class JobEntity {\n"
+                        + "  @TableRef(name = TableNames.JOB)\n"
+                        + "  public Object field;\n"
+                        + "  @ColumnRefs(names = {TableNames.JOB, TableNames.TELE})\n"
+                        + "  public Object other;\n"
+                        + "  @TableRef(name = TableNames.DUP_A)\n"
+                        + "  public Object ambiguous;\n"
+                        + "}\n");
+
+        new BytecodeStripper().strip(classes);
+
+        final ClassNode entity = read(classes, "test/JobEntity");
+        final org.objectweb.asm.tree.AnnotationNode fieldRef = entity.fields.stream()
+                .filter(f -> f.name.equals("field")).findFirst().get().visibleAnnotations.get(0);
+        assertThat(fieldRef.values.get(1), is("ESA_JOB"));
+        final org.objectweb.asm.tree.AnnotationNode columnsRef = entity.fields.stream()
+                .filter(f -> f.name.equals("other")).findFirst().get().visibleAnnotations.get(0);
+        assertThat(columnsRef.values.get(1),
+                is((Object) java.util.Arrays.asList("ESA_JOB", "ESA_TELE")));
+        final org.objectweb.asm.tree.AnnotationNode ambiguousRef = entity.fields.stream()
+                .filter(f -> f.name.equals("ambiguous")).findFirst().get().visibleAnnotations.get(0);
+        assertThat(ambiguousRef.values.get(1), is((Object) "ambiguous"));
+    }
+
+    @Test
+    void addsDefaultConstructorWhenAllExplicitConstructorsAreFlavourSpecific() throws Exception {
+        final Path classes = compile("test/GatewayData.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public class GatewayData {\n"
+                        + "  private String type;\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  public GatewayData() {\n"
+                        + "      this.type = \"nasa\";\n"
+                        + "  }\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  public GatewayData(final String type) {\n"
+                        + "      this.type = type;\n"
+                        + "  }\n"
+                        + "  public String getType() { return type; }\n"
+                        + "}\n",
+                "test/GatewayUser.java",
+                "package test;\n"
+                        + "public class GatewayUser {\n"
+                        + "  public String build() {\n"
+                        + "    return new GatewayData().getType();\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        // javac parity: without an explicit constructor the flavour model
+        // gets the implicit default constructor, like a recompile would
+        final ClassNode data = read(classes, "test/GatewayData");
+        assertThat(method(data, "<init>", "()V"), is(not(nullValue())));
+        assertThat(method(data, "<init>", "(Ljava/lang/String;)V"), is(nullValue()));
+        assertThat(data.methods.stream()
+                .filter(m -> "<init>".equals(m.name)).count(), is(1L));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> dataClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.GatewayData");
+        final Object plain = dataClass.getDeclaredConstructor().newInstance();
+        assertThat(dataClass.getMethod("getType").invoke(plain), is(nullValue()));
+
+        final Class<?> userClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.GatewayUser");
+        assertThat(userClass.getMethod("build")
+                .invoke(userClass.getDeclaredConstructor().newInstance()), is(nullValue()));
+    }
+
+    @Test
+    void keepsSurvivingConstructorWithoutAddingADefault() throws Exception {
+        final Path classes = compile("test/MixedCtorHolder.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public class MixedCtorHolder {\n"
+                        + "  private final String value;\n"
+                        + "  @OnlyIf(\"NASA\")\n"
+                        + "  public MixedCtorHolder() { this.value = \"nasa\"; }\n"
+                        + "  public MixedCtorHolder(final String value) { this.value = value; }\n"
+                        + "  public String getValue() { return value; }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode holder = read(classes, "test/MixedCtorHolder");
+        assertThat(holder.methods.stream()
+                .filter(m -> "<init>".equals(m.name)).count(), is(1L));
+        assertThat(method(holder, "<init>", "(Ljava/lang/String;)V"), is(not(nullValue())));
+
+        final Set<java.io.File> dirs = new HashSet<>();
+        dirs.add(classes.toFile());
+        assertThat(ReferenceVerifier.findDanglingReferences(
+                dirs, result.getRemovedClasses(), result.getRemovedMembers()).isEmpty(), is(true));
+
+        final Class<?> holderClass = new java.net.URLClassLoader(
+                new java.net.URL[] {classes.toUri().toURL()}, null).loadClass("test.MixedCtorHolder");
+        final Object plain = holderClass.getConstructor(String.class).newInstance("esa");
+        assertThat(holderClass.getMethod("getValue").invoke(plain), is("esa"));
     }
 
     @Test

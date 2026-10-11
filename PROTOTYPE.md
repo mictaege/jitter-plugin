@@ -39,6 +39,14 @@ Bytecode stripping couples only to the class file format (works across Java
   - `@Alter`: renames the template class into the target slot
     (`ClassRemapper`, visibility ACC_PUBLIC transferred from the target,
     template deleted - note: unlike Spoon, templates do NOT leak into the output)
+  - javac parity for constructors: when all explicit constructors of a
+    class are flavour specific, the flavour model gets the implicit
+    default constructor javac would have generated for the recompiled
+    source model (same access as the class, empty body with `super()`) -
+    only for classes whose constructors were actually removed, never for
+    Kotlin compiler generated ctor-less helpers (`$WhenMappings`,
+    `$DefaultImpls`, `$1`), and not for non-static inner classes (their
+    implicit ctor carries the outer instance)
   - Enums: constant init blocks removed from `<clinit>`, surviving ordinals
     renumbered, `$values()` array rebuilt (old-style `$VALUES` in `<clinit>`
     supported as well)
@@ -49,7 +57,14 @@ Bytecode stripping couples only to the class file format (works across Java
     chains etc.) are removable; a block is only removed when it is
     self-contained (no branch into it, no exception/local-variable range
     crossing it). Branchy initializers (ternaries etc.) still bail out and
-    are reported.
+    are reported. Initializers with lambdas and method references are
+    covered (2026-10-10, ologis `DataFix` pattern): `invokedynamic` stack
+    effects, javac's bound-method-reference `DUP + requireNonNull + POP`
+    null-check pattern and straight-line arithmetic/conversions are
+    handled, and the initializer's synthetic `lambda$new$N` methods are
+    removed with it (transitively - lambdas nest, and their bodies may
+    reference removed classes), registered for the
+    `$deserializeLambda$` cleanup like removed-method lambdas.
   - Orphaned synthetics removed (fixpoint sweep, reference counting over the
     surviving bytecode): anonymous inner classes, switch map classes and
     enum-constant-body classes (`Outer$N`) and `access$NNN` methods whose only
@@ -581,6 +596,95 @@ Operationally: a failed deploy leaves the payara domain running, which
 blocks the next `restore-domain` - stop the domain before re-running
 `buildLocalDevEnv` after a failure.
 
+## Lambda field initializers of removed fields (2026-10-10)
+
+Found by the first large acceptancetest run
+(`acceptancetest:process:end2EndTest --tests "com.zitecs.ologis.*"`, Bmx):
+`:acceptancetest:process:jitterVerify` failed with
+`AbstractOrderFlow accesses removed field AbstractOrderFlow#onSiteCfg`.
+`onSiteCfg` is `@OnlyIf(MPK)` with a `DataFix` initializer built from
+method references and lambdas (`new DataFix<>(dao()::merge,
+c -> dao()::findById(...), ...)`). Two stripper gaps, both fixed:
+
+1. The backward stack-effect scan had no `invokedynamic` case, so any
+   initializer containing a lambda or method reference bailed out and
+   left the `PUTFIELD` as a dangling reference. Now handled, together
+   with javac's bound-method-reference null-check pattern
+   (`INVOKESTATIC dao(); DUP; requireNonNull; POP; INVOKEDYNAMIC`) and
+   straight-line arithmetic/conversion opcodes. Ternaries still bail
+   out (branchy).
+2. The initializer's synthetic `lambda$new$N` methods would have
+   survived as dead code with possibly dangling bodies (the lambdas
+   reference `OnSitePharmacyCfg`, an Mpk-only class). They are now
+   removed together with the initializer - transitively, since lambdas
+   nest - and registered for the `$deserializeLambda$` cleanup like the
+   lambdas of removed methods (`removeFieldInitializers` now runs before
+   `cleanDeserializeLambda`).
+
+Verified: plugin suite 56 green (new test with the bound-ref + lambda
+pattern, executed stripped class); ologis Bmx
+`:acceptancetest:process:jitterVerify` green with
+`Remove lambda ...lambda$new$6/7` in the strip log; Bmx `compileAll`
+green.
+
+Also surfaced by the first large acceptancetest run (Dba), and NOT a
+plugin issue: `@Fork(to = "flavouredContextDba")` in the PBH test pointed
+at a private template of the parent class instead of a method of the
+declaring class - a construct the Spoon processor silently swallowed
+(it logged the same error and left the gateway's empty body, so the Dba
+scenario never got its Dba context). The stripper's hard error exposed a
+real, long-masked ologis bug (fixed in the ologis code). `@Fork`'s model
+stays: gateway and templates in the same class.
+
+## Implicit default constructors restored (2026-10-11)
+
+The first full Dba acceptancetest run
+(`acceptancetest:process:end2EndTest --tests "com.zitecs.ologis.*"`,
+2544 steps, 1041 failed) funneled into a single root cause:
+`ImportPaymentData`'s ONLY constructor is `@OnlyIf(BMX)` - in Dba the
+class had no constructor at all, while un-gated backend code
+(`XmlCustOrderToImportOrderCmd`, `CustOrderResource`) and the un-gated
+test builder (`ImportPaymentDataBuilder`) call `new ImportPaymentData()`.
+Backend effect: the XML cust order import died, orders stayed CREATED
+(114 test classes with state assertions); test-side: 36 classes died at
+the builder with `NoSuchMethodError`; everything else was arete cascade
+("No entity is matching the given predicate" x610, custOrder-null NPEs,
+HTTP status failures).
+
+Why undetected: the reference verification works per module/source set.
+The testFixtures -> main reference is only seen by the aggregate verify
+task, which does not run when merely consuming the stripped artifacts;
+the cc-contracts -> ologis-api reference is cross-module and invisible
+to any per-module verify under the full-model-compile design (this is
+the check the Spoon pipeline got for free, because downstream modules
+compiled against the stripped source model - there it was a Dba COMPILE
+error).
+
+The fix restores javac parity instead of touching ologis: under Spoon
+the recompiled flavour model ALWAYS had javac's implicit default
+constructor when no explicit one remained, so `new ImportPaymentData()`
+was legal in every Spoon flavour. `restoreDefaultConstructors` now adds
+exactly that ctor (same access as the class, `super()` body) when the
+stripping removed all constructors of a class - the restored `()V` is
+un-registered from the removed members, so references to it pass the
+verification again. Guard rails: only classes whose ctors were actually
+removed (Kotlin compiler generated ctor-less helpers like
+`$WhenMappings`/`$DefaultImpls` must not get one), no interfaces/enums/
+annotations, no named non-static inner classes (implicit ctor carries
+the outer instance - reported by the verify instead).
+
+Open follow-ups from the analysis (not yet built): a scoped verify for
+`jitterTestFixturesJar` (testFixtures -> main references of other member
+kinds), and removal manifests in the stripped jars +
+classpath-aware consumer verification for cross-module references.
+
+Verified: plugin suite 58 green (default ctor restored + executed,
+surviving ctor untouched); ologis Dba `clean compileAll` green with
+exactly ONE restoration - `ImportPaymentData` - across the whole build
+(the naive "no ctor remains" condition had produced 202 spurious ones);
+stripped Dba `ImportPaymentData` carries the public default ctor, the
+BMX fields are gone. Bmx unaffected (ctor survives, nothing restored).
+
 ## Annotation-gated resources (2026-10): one mechanism for classes and resources
 
 Closes the last gap of the suffix convention: XML resources can now carry
@@ -596,9 +700,23 @@ gated resource from the processed resources when the active flavour is
 not part of the gate; a gated resource is never renamed (the gate
 expresses presence or absence, while the suffix convention remains for
 per-flavour content variants). Without an active flavour nothing is
-gated, mirroring the class model. Note that an xjc
-`annox:annotatePackage` gate doubles as a resource gate automatically -
-one annotation, one semantics.
+gated, mirroring the class model.
+
+**Correction (2026-10-10)**: the coupling of the annox generation gate to
+the resource gate was wrong and is reverted. The first Bmx end2End test
+run (`HandleDeviationsTest...ConfirmCancellation`) failed with a marshall
+exception: `XmlStationCompleteMessageMarshaller` builds its validation
+schema at runtime, and `StationCompleteMessage.xsd` (Bmx-present) imports
+`base:XmlDateTimeNoDelimiters` from `base.xsd` - which the annox gate
+`@OnlyIf({Mpk, Dba})` had removed from the Bmx jar
+(`src-resolve: Name 'base:XmlDateTimeNoDelimiters' ...`). A generation
+gate belongs to the class model (which classes are generated per flavour)
+and says nothing about the resource's runtime role: flavour-specific
+message schemas of ANY flavour may import the shared base types.
+`XmlResourceGate` therefore ignores `@OnlyIf` expressions inside `annox:*`
+elements now; only hand-written plain appinfo gates gate a resource.
+Consequence: `base.xsd` ships in every flavour again (as it did under the
+old rename mechanism), while the generated base classes stay Mpk/Dba-only.
 
 **ologis migration** (uncommitted): the 8 mfr
 `*MFR_Dba.xsd` schemas and the sitefs `*_Mpk.xsd` family dropped their
@@ -609,20 +727,61 @@ alongside and its schemaLocation updated; it carries no gate (xjb has no
 appinfo), so it ships in every flavour as dead weight - bindings are
 build-time inputs only.
 
-**Consequence to be aware of**: `base.xsd` of `mpk-cc-contracts`
-(`@OnlyIf({Mpk, Dba})` as annox generation gate) now also gates its
-resource - the schema disappears from the Bmx jar, consistent with the
-Bmx class model (the generated `com.zitecs.ologis.base` package is
-stripped there). Previously it shipped in every flavour's jar.
-
 **Verified**: plain `compileAll` green (Dba); strip-mode matrix green in
 Dba/Mpk/Bmx with correct resource shapes - Dba: the 8 mfr schemas
 present under their unsuffixed names (byte-identical jar content to the
 old rename mechanism), sitefs absent, base.xsd present; Mpk: both sitefs
 schemas present under their unsuffixed names, mfr schemas absent, only
 the ungated `mfr2022/.../base/base.xsd` remains in the mfr jar; Bmx:
-base.xsd newly absent (see above), everything else flavour-correct.
-Plugin suite: 49 tests green.
+everything flavour-correct. After the correction re-verified (Bmx):
+`base.xsd` present again in the cc-contracts jar next to
+`StationCompleteMessage.xsd`, the hand-written Dba gates of the mfr
+schemas still exclude their resources. Plugin suite: 55 tests green.
+
+## Inlined annotation constants of `@Alter`ed constants classes (2026-10)
+
+Surfaced by the first ologis integration tests: `Ologis2PeemStandardJob`
+inserted into `OLOGIS2PEEMSTANDARDJOB` (the raw entity name) instead of the
+real table `OLOGISJOBH2C1`. Cause: javac inlines compile-time constants into
+annotations, so `@Table(name = PeemTableNames.OLOGIS_2_PEEM_STANDARD_JOB)`
+bakes the full-model value into the entity's bytecode. The `@Alter` of
+`PeemTableNames` itself worked, but the entities kept the inlined stale value
+- the source transformation never saw this because Spoon re-baked the values
+by rewriting sources before downstream compilation.
+
+**Solution: re-baking.** When a class with `@Alter` is replaced, the stripper
+collects a fullValue→templateValue map for String constants of the target
+class (now the full model, i.e. pre-strip) and rewrites matching String
+values in the annotations of ALL surviving classes (class/field/method/
+parameter annotations, annotation defaults, nested arrays and nested
+annotations). Ambiguity guard: a full-model value that occurs for more than
+one field of the target class (or is already mapped) is skipped, so distinct
+constants can never collapse into one value.
+
+**Contract for constants classes**: the full-model constants must be unambiguous
+across flavours, or the re-bake is skipped. In ologis the six
+`PeemTableNames` constants that were `""` became unique self-named markers
+(e.g. `"OLOGIS_2_PEEM_STANDARD_JOB"`). `MfrTableNames` and
+`WamasFsTableNames` need no markers: their full-model values are real table
+names identical in meaning, and the fields don't exist in the templates, so
+re-baking is a safe no-op. Markers must never reach runtime - the stripper
+reports the re-baked values (`Re-baked N altered constant value(s) ...`), and
+a missed marker shows up as a broken table name in the logs.
+
+Dba note: `com.zitecs.ologis.peem.connectivity` (and its subpackages) are
+`@OnlyIf({Mpk, Bmx})`, so in Dba the whole package including the entities is
+removed - nothing is re-baked there and the empty stripped output of
+`ologis-mpk-peem-api` in Dba is correct.
+
+**Verified (uncommitted)**: plugin suite 54 green (new test
+`rebakesInlinedAnnotationConstantsOfAlteredConstantsClasses`: unique marker,
+array-valued annotation, ambiguous-skip). ologis: Bmx `clean compileAll` green,
+`Re-baked 6 altered constant value(s) in the annotations of 6 class(es)` in
+the strip log; stripped `Ologis2PeemStandardJob` carries
+`@Table(name = "OLOGISJOBH2C1")` (Bmx) resp. `"MPKJOBH2C1"` (Mpk); full model
+keeps the markers; Dba `clean compileAll` green (package removed). The failing
+`PeemTableNames`-based integration tests still need a manual re-run against a
+deployed environment.
 
 ## Next steps
 

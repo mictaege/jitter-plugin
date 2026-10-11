@@ -36,6 +36,15 @@ public final class StripResult {
         removedMembers.add(key);
     }
 
+    /**
+     * A member that was recorded as removed but exists in the flavour
+     * model again, like the implicit default constructor of a class whose
+     * explicit constructors were all flavour specific (javac parity).
+     */
+    public void restoredMember(final String key) {
+        removedMembers.remove(key);
+    }
+
     public void removedField(final String owner, final String name, final String desc,
                              final boolean isStatic) {
         removedFields.add(owner + "|" + name + "|" + desc + "|" + (isStatic ? "S" : "I"));

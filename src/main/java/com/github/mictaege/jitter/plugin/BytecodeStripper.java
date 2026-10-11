@@ -29,6 +29,7 @@ import org.objectweb.asm.tree.TableSwitchInsnNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
+import org.objectweb.asm.tree.InnerClassNode;
 
 import java.io.IOException;
 import java.nio.file.FileVisitResult;
@@ -144,13 +145,16 @@ public final class BytecodeStripper {
         }
 
         removePackages(nodes, result, dirty);
-        applyAltclasses(nodes, result, dirty, templateClasspath);
+        final Map<String, String> constantReplacements = new java.util.HashMap<>();
+        applyAltclasses(nodes, result, dirty, templateClasspath, constantReplacements);
+        rebakeAnnotationConstants(nodes, constantReplacements, result, dirty);
         applyForkMethods(nodes, result, dirty);
         rewriteEnums(nodes, result, dirty);
         final Map<String, List<String[]>> removedLambdas = new java.util.HashMap<>();
         removeOnlyIf(nodes, result, dirty, removedLambdas);
+        restoreDefaultConstructors(nodes, result, dirty);
+        removeFieldInitializers(nodes, result, dirty, removedLambdas);
         cleanDeserializeLambda(nodes, dirty, removedLambdas);
-        removeFieldInitializers(nodes, result, dirty);
         removeOrphanedSynthetics(nodes, result, dirty);
         cleanSwitchMaps(nodes, result, dirty);
         cleanAnnotations(nodes, dirty);
@@ -221,7 +225,8 @@ public final class BytecodeStripper {
     }
 
     private void applyAltclasses(final Map<String, ClassNode> nodes, final StripResult result,
-                                 final Set<String> dirty, final List<java.io.File> templateClasspath) {
+                                 final Set<String> dirty, final List<java.io.File> templateClasspath,
+                                 final Map<String, String> constantReplacements) {
         for (final ClassNode target : new ArrayList<>(nodes.values())) {
             final AnnotationNode matching = matchingAnnotation(target.visibleAnnotations, ALTER, ALTERNATIVES, "with");
             if (matching == null) {
@@ -238,6 +243,7 @@ public final class BytecodeStripper {
                 result.error("The given alternative class " + with + " could not be found");
                 continue;
             }
+            collectConstantReplacements(target, template, constantReplacements);
             final ClassNode renamed = remap(template, templateName, target.name);
             if ((target.access & Opcodes.ACC_PUBLIC) != 0) {
                 renamed.access |= Opcodes.ACC_PUBLIC;
@@ -256,6 +262,141 @@ public final class BytecodeStripper {
             }
             dirty.add(target.name);
         }
+    }
+
+    /**
+     * Annotation values are compile-time constants - javac inlines the
+     * value of e.g. {@code @Table(name = TableNames.JOB)} into the
+     * annotated class. When the constants class is flavour-altered, those
+     * inlined values must be re-baked to the active flavour's template
+     * value as well. This is only sound when the full-model value is
+     * unambiguous: values that occur for more than one field are skipped.
+     */
+    private void collectConstantReplacements(final ClassNode target, final ClassNode template,
+                                             final Map<String, String> replacements) {
+        final Set<String> ambiguous = new java.util.HashSet<>();
+        final Map<String, Integer> counts = new java.util.HashMap<>();
+        for (final FieldNode field : target.fields) {
+            if (field.value instanceof String) {
+                counts.merge((String) field.value, 1, Integer::sum);
+            }
+        }
+        counts.forEach((value, count) -> {
+            if (count > 1 || replacements.containsKey(value)) {
+                replacements.remove(value);
+                ambiguous.add(value);
+            }
+        });
+        for (final FieldNode field : target.fields) {
+            if (field.value instanceof String) {
+                final String value = (String) field.value;
+                if (ambiguous.contains(value)) {
+                    continue;
+                }
+                template.fields.stream()
+                        .filter(t -> t.name.equals(field.name) && t.value instanceof String)
+                        .findFirst()
+                        .ifPresent(t -> replacements.put(value, (String) t.value));
+            }
+        }
+    }
+
+    /**
+     * Replaces the inlined full-model constant values in the annotations
+     * of all surviving classes with the active flavour's template values.
+     */
+    private void rebakeAnnotationConstants(final Map<String, ClassNode> nodes,
+                                            final Map<String, String> replacements,
+                                            final StripResult result, final Set<String> dirty) {
+        if (replacements.isEmpty()) {
+            return;
+        }
+        int rebaked = 0;
+        for (final ClassNode node : nodes.values()) {
+            boolean changed = false;
+            changed |= rebake(node.visibleAnnotations, replacements);
+            changed |= rebake(node.invisibleAnnotations, replacements);
+            for (final FieldNode field : node.fields) {
+                changed |= rebake(field.visibleAnnotations, replacements);
+                changed |= rebake(field.invisibleAnnotations, replacements);
+            }
+            for (final MethodNode method : node.methods) {
+                changed |= rebake(method.visibleAnnotations, replacements);
+                changed |= rebake(method.invisibleAnnotations, replacements);
+                changed |= rebake(method.visibleParameterAnnotations, replacements);
+                changed |= rebake(method.invisibleParameterAnnotations, replacements);
+                if (method.annotationDefault instanceof AnnotationNode) {
+                    changed |= rebake(java.util.Collections.singletonList(
+                            (AnnotationNode) method.annotationDefault), replacements);
+                } else if (method.annotationDefault instanceof List) {
+                    changed |= rebakeList((List<Object>) method.annotationDefault, replacements);
+                }
+            }
+            if (changed) {
+                rebaked++;
+                dirty.add(node.name);
+            }
+        }
+        if (rebaked > 0) {
+            result.info("Re-baked " + replacements.size() + " altered constant value(s) in the annotations of "
+                    + rebaked + " class(es)");
+        }
+    }
+
+    private boolean rebake(final List<AnnotationNode>[] annotationArrays,
+                            final Map<String, String> replacements) {
+        boolean changed = false;
+        if (annotationArrays != null) {
+            for (final List<AnnotationNode> annotations : annotationArrays) {
+                changed |= rebake(annotations, replacements);
+            }
+        }
+        return changed;
+    }
+
+    private boolean rebake(final List<AnnotationNode> annotations,
+                           final Map<String, String> replacements) {
+        boolean changed = false;
+        if (annotations != null) {
+            for (final AnnotationNode annotation : annotations) {
+                changed |= rebake(annotation, replacements);
+            }
+        }
+        return changed;
+    }
+
+    private boolean rebake(final AnnotationNode annotation, final Map<String, String> replacements) {
+        boolean changed = false;
+        if (annotation.values != null) {
+            for (int i = 0; i < annotation.values.size(); i += 2) {
+                final Object value = annotation.values.get(i + 1);
+                if (value instanceof String && replacements.containsKey(value)) {
+                    annotation.values.set(i + 1, replacements.get(value));
+                    changed = true;
+                } else if (value instanceof AnnotationNode) {
+                    changed |= rebake((AnnotationNode) value, replacements);
+                } else if (value instanceof List) {
+                    changed |= rebakeList((List<Object>) value, replacements);
+                }
+            }
+        }
+        return changed;
+    }
+
+    private boolean rebakeList(final List<Object> values, final Map<String, String> replacements) {
+        boolean changed = false;
+        for (int i = 0; i < values.size(); i++) {
+            final Object value = values.get(i);
+            if (value instanceof String && replacements.containsKey(value)) {
+                values.set(i, replacements.get(value));
+                changed = true;
+            } else if (value instanceof AnnotationNode) {
+                changed |= rebake((AnnotationNode) value, replacements);
+            } else if (value instanceof List) {
+                changed |= rebakeList((List<Object>) value, replacements);
+            }
+        }
+        return changed;
     }
 
     /**
@@ -710,13 +851,88 @@ public final class BytecodeStripper {
     }
 
     /**
+     * When all explicit constructors of a class are flavour specific, the
+     * flavour model has no constructor left and the class could neither be
+     * instantiated nor be subclassed with an implicit {@code super()} call.
+     * The source transformation never had this situation: it removed the
+     * constructor from the source model, and the recompilation let javac
+     * add the implicit default constructor. This method restores exactly
+     * that javac behaviour: a class without a remaining constructor gets
+     * the default constructor javac would have generated - same access as
+     * the class, empty body with the implicit {@code super()} call.
+     *
+     * <p>Not applicable to interfaces, enums and annotations (their
+     * constructors follow other rules and are never implicit), and only
+     * to classes whose constructors were actually removed by the
+     * stripping - a class that never had a constructor (Kotlin compiler
+     * generated all-static helpers like {@code $WhenMappings} or
+     * {@code $DefaultImpls}) must not get one. Named non-static inner
+     * classes are skipped as well: their implicit constructor takes the
+     * outer instance as a parameter and assigns it to the synthetic outer
+     * field - a surviving reference to such a constructor is reported by
+     * the reference verification instead.
+     */
+    private void restoreDefaultConstructors(final Map<String, ClassNode> nodes, final StripResult result,
+                                            final Set<String> dirty) {
+        for (final ClassNode node : new ArrayList<>(nodes.values())) {
+            if ((node.access & (Opcodes.ACC_INTERFACE | Opcodes.ACC_ENUM
+                    | Opcodes.ACC_ANNOTATION)) != 0) {
+                continue;
+            }
+            if (node.methods.stream().anyMatch(m -> "<init>".equals(m.name))) {
+                continue;
+            }
+            // only a class whose constructors were actually removed by the
+            // stripping is the javac parity case; a class that never had a
+            // constructor (Kotlin compiler generated all-static helpers like
+            // $WhenMappings or $DefaultImpls) must not get one
+            if (!hadRemovedConstructor(result, node)) {
+                continue;
+            }
+            if (isNonStaticInnerClass(node)) {
+                continue;
+            }
+            final int access = (node.access & Opcodes.ACC_PUBLIC) != 0 ? Opcodes.ACC_PUBLIC : 0;
+            final MethodNode ctor = new MethodNode(access, "<init>", "()V", null, null);
+            ctor.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+            ctor.instructions.add(new MethodInsnNode(Opcodes.INVOKESPECIAL,
+                    node.superName == null ? "java/lang/Object" : node.superName,
+                    "<init>", "()V", false));
+            ctor.instructions.add(new InsnNode(Opcodes.RETURN));
+            ctor.maxStack = 1;
+            ctor.maxLocals = 1;
+            node.methods.add(ctor);
+            result.restoredMember(memberKey(node.name, "<init>", "()V"));
+            result.info("Add default constructor to " + node.name.replace('/', '.')
+                    + " because all explicit constructors are flavour specific");
+            dirty.add(node.name);
+        }
+    }
+
+    private boolean hadRemovedConstructor(final StripResult result, final ClassNode node) {
+        final String prefix = node.name + ".<init>";
+        return result.getRemovedMembers().stream().anyMatch(key -> key.startsWith(prefix));
+    }
+
+    private boolean isNonStaticInnerClass(final ClassNode node) {
+        for (final InnerClassNode inner : node.innerClasses) {
+            if (inner.name.equals(node.name) && inner.outerName != null
+                    && (inner.access & Opcodes.ACC_STATIC) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Removing a field with an inline initializer leaves the initializer
      * store behind in the constructor resp. the static initializer. The
      * store including the instructions that produce the value has to be
      * removed as well, as the source transformation would do implicitly.
      */
     private void removeFieldInitializers(final Map<String, ClassNode> nodes, final StripResult result,
-                                         final Set<String> dirty) {
+                                         final Set<String> dirty,
+                                         final Map<String, List<String[]>> removedLambdas) {
         for (final String key : result.getRemovedFields()) {
             final String[] parts = key.split("\\|");
             final String owner = parts[0];
@@ -735,14 +951,16 @@ public final class BytecodeStripper {
                 if (!initializerHost) {
                     continue;
                 }
-                removeInitializerStores(method, owner, fieldName, fieldDesc, result, dirty);
+                removeInitializerStores(node, method, fieldName, fieldDesc, result, dirty, removedLambdas);
             }
         }
     }
 
-    private void removeInitializerStores(final MethodNode method, final String owner,
+    private void removeInitializerStores(final ClassNode node, final MethodNode method,
                                          final String fieldName, final String fieldDesc,
-                                         final StripResult result, final Set<String> dirty) {
+                                         final StripResult result, final Set<String> dirty,
+                                         final Map<String, List<String[]>> removedLambdas) {
+        final String owner = node.name;
         final List<AbstractInsnNode> insns = new ArrayList<>();
         method.instructions.forEach(insns::add);
         int t = 0;
@@ -767,10 +985,77 @@ public final class BytecodeStripper {
                 continue;
             }
             final List<AbstractInsnNode> block = insns.subList(start, t);
+            removeInitializerLambdas(node, block, removedLambdas, result, dirty);
             block.forEach(method.instructions::remove);
             block.clear();
             t = start;
             dirty.add(owner);
+        }
+    }
+
+    /**
+     * The lambdas and method references of a removed initializer compile
+     * to synthetic methods ({@code lambda$new$N}) referenced by the
+     * block's {@code invokedynamic} bootstrap handles. Their bodies may
+     * themselves reference flavour specific code, so they are removed
+     * together with the initializer - transitively, since lambdas nest.
+     * Every removed lambda is registered for the
+     * {@code $deserializeLambda$} cleanup, exactly like the lambdas of
+     * removed methods.
+     */
+    private void removeInitializerLambdas(final ClassNode node, final List<AbstractInsnNode> block,
+                                          final Map<String, List<String[]>> removedLambdas,
+                                          final StripResult result, final Set<String> dirty) {
+        final List<MethodNode> agenda = new ArrayList<>();
+        for (final AbstractInsnNode insn : block) {
+            addLambdaTargets(node, insn, agenda);
+        }
+        final List<MethodNode> toRemove = new ArrayList<>();
+        while (!agenda.isEmpty()) {
+            final MethodNode lambda = agenda.remove(agenda.size() - 1);
+            if (toRemove.contains(lambda)) {
+                continue;
+            }
+            toRemove.add(lambda);
+            for (final AbstractInsnNode insn : lambda.instructions) {
+                addLambdaTargets(node, insn, agenda);
+            }
+        }
+        if (toRemove.isEmpty()) {
+            return;
+        }
+        node.methods.removeAll(toRemove);
+        for (final MethodNode lambda : toRemove) {
+            result.removedMember(memberKey(node.name, lambda.name, lambda.desc));
+            result.info("Remove lambda " + node.name.replace('/', '.') + "#" + lambda.name);
+            removedLambdas
+                    .computeIfAbsent(node.name, k -> new ArrayList<>())
+                    .add(new String[]{lambda.name, lambda.desc});
+        }
+        dirty.add(node.name);
+    }
+
+    /**
+     * Adds the synthetic lambda methods the given instruction references
+     * via {@code invokedynamic} bootstrap handles - only handles pointing
+     * into this class; those are the class's own lambda implementations.
+     */
+    private void addLambdaTargets(final ClassNode node, final AbstractInsnNode insn,
+                                  final List<MethodNode> agenda) {
+        if (!(insn instanceof InvokeDynamicInsnNode)) {
+            return;
+        }
+        for (final Object arg : ((InvokeDynamicInsnNode) insn).bsmArgs) {
+            if (arg instanceof org.objectweb.asm.Handle
+                    && ((org.objectweb.asm.Handle) arg).getOwner().equals(node.name)) {
+                final org.objectweb.asm.Handle handle = (org.objectweb.asm.Handle) arg;
+                for (final MethodNode candidate : node.methods) {
+                    if (candidate.name.equals(handle.getName())
+                            && candidate.desc.equals(handle.getDesc())) {
+                        agenda.add(candidate);
+                    }
+                }
+            }
         }
     }
 
@@ -885,6 +1170,16 @@ public final class BytecodeStripper {
                 || opcode == Opcodes.SIPUSH) {
             return new int[]{0, 1};
         }
+        if (opcode == Opcodes.POP) {
+            return new int[]{1, 0};
+        }
+        if (opcode == Opcodes.POP2) {
+            return new int[]{2, 0};
+        }
+        final int[] arithmetic = arithmeticEffect(opcode);
+        if (arithmetic != null) {
+            return arithmetic;
+        }
         if (insn instanceof LdcInsnNode) {
             final Object cst = ((LdcInsnNode) insn).cst;
             final boolean wide = cst instanceof Long || cst instanceof Double;
@@ -932,12 +1227,68 @@ public final class BytecodeStripper {
             final int receiver = opcode == Opcodes.INVOKESTATIC ? 0 : 1;
             return new int[]{args + receiver, ret};
         }
+        if (insn instanceof InvokeDynamicInsnNode) {
+            // lambdas and method references: the call site descriptor
+            // consumes the captured arguments and produces the
+            // functional interface instance
+            final InvokeDynamicInsnNode indy = (InvokeDynamicInsnNode) insn;
+            final Type[] captures = Type.getArgumentTypes(indy.desc);
+            int pops = 0;
+            for (final Type capture : captures) {
+                pops += capture.getSize();
+            }
+            return new int[]{pops, Type.getReturnType(indy.desc).getSize()};
+        }
         return null;
     }
 
     private int wide(final int opcode) {
         return opcode == Opcodes.LCONST_0 || opcode == Opcodes.LCONST_1
                 || opcode == Opcodes.DCONST_0 || opcode == Opcodes.DCONST_1 ? 2 : 1;
+    }
+
+    /**
+     * Stack effect of the straight-line arithmetic and conversion
+     * opcodes, or null if the opcode is none of them. Only used by the
+     * backward initializer scan, which bails out on anything unknown -
+     * branches (the operands of a ternary) still make it give up.
+     */
+    private int[] arithmeticEffect(final int opcode) {
+        if (opcode >= Opcodes.IADD && opcode <= Opcodes.DREM) {
+            // I L F D per operation group: pops 2/4/2/4, pushes 1/2/1/2
+            final int group = (opcode - Opcodes.IADD) % 4;
+            return group == 1 || group == 3
+                    ? new int[]{4, 2}
+                    : new int[]{2, 1};
+        }
+        if (opcode >= Opcodes.INEG && opcode <= Opcodes.DNEG) {
+            // I L F D
+            return new int[]{(opcode - Opcodes.INEG) % 2 == 1 ? 2 : 1,
+                    (opcode - Opcodes.INEG) % 2 == 1 ? 2 : 1};
+        }
+        if (opcode >= Opcodes.ISHL && opcode <= Opcodes.LUSHR) {
+            // I L I L I L: a long shift pops the long and the int count
+            return new int[]{(opcode - Opcodes.ISHL) % 2 == 1 ? 3 : 2,
+                    (opcode - Opcodes.ISHL) % 2 == 1 ? 2 : 1};
+        }
+        if (opcode >= Opcodes.IAND && opcode <= Opcodes.LXOR) {
+            // I L I L I L
+            return new int[]{(opcode - Opcodes.IAND) % 2 == 1 ? 4 : 2,
+                    (opcode - Opcodes.IAND) % 2 == 1 ? 2 : 1};
+        }
+        switch (opcode) {
+            case Opcodes.I2L: case Opcodes.I2D:
+            case Opcodes.F2L: case Opcodes.F2D:
+                return new int[]{1, 2};
+            case Opcodes.L2I: case Opcodes.L2F: case Opcodes.L2D:
+            case Opcodes.D2I: case Opcodes.D2L: case Opcodes.D2F:
+                return new int[]{2, (opcode == Opcodes.L2D || opcode == Opcodes.D2L) ? 2 : 1};
+            case Opcodes.I2F: case Opcodes.F2I:
+            case Opcodes.I2B: case Opcodes.I2C: case Opcodes.I2S:
+                return new int[]{1, 1};
+            default:
+                return null;
+        }
     }
 
     /**

@@ -41,10 +41,24 @@ public class XmlResourceGateTest {
     }
 
     @Test
-    void detectsAnnoxGenerationGate() throws Exception {
+    void ignoresAnnoxGenerationGate() throws Exception {
+        // generation directives belong to the class model: a schema whose
+        // generated classes are flavour-gated can still be a runtime
+        // dependency of surviving schemas (xsd:import of base types)
         assertThat(XmlResourceGate.flavours(file("schema.xsd",
                 "<xsd:schema xmlns:annox='urn:jaxb.jvnet.org:annox'><xsd:annotation>"
                         + "<xsd:appinfo>"
+                        + "<annox:annotatePackage>@com.github.mictaege.jitter.api.OnlyIf({\"Mpk\", \"Dba\"})</annox:annotatePackage>"
+                        + "</xsd:appinfo></xsd:annotation></xsd:schema>")),
+                is(nullValue()));
+    }
+
+    @Test
+    void detectsHandWrittenGateNextToAnnoxGenerationGate() throws Exception {
+        assertThat(XmlResourceGate.flavours(file("schema.xsd",
+                "<xsd:schema xmlns:annox='urn:jaxb.jvnet.org:annox'><xsd:annotation>"
+                        + "<xsd:appinfo>"
+                        + "@OnlyIf({\"Mpk\", \"Dba\"})"
                         + "<annox:annotatePackage>@com.github.mictaege.jitter.api.OnlyIf({\"Mpk\", \"Dba\"})</annox:annotatePackage>"
                         + "</xsd:appinfo></xsd:annotation></xsd:schema>")),
                 is(List.of("Mpk", "Dba")));
