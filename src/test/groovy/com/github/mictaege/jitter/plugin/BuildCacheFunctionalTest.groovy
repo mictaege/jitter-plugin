@@ -17,6 +17,7 @@ import static org.hamcrest.Matchers.containsInAnyOrder
 import static org.hamcrest.Matchers.containsString
 import static org.hamcrest.Matchers.is
 import static org.hamcrest.Matchers.not
+import static org.hamcrest.Matchers.nullValue
 
 /** Builds a small project with the flavours A and B to verify up-to-date checks and build caching. */
 class BuildCacheFunctionalTest {
@@ -125,7 +126,10 @@ class BuildCacheFunctionalTest {
 
         assertThat(result.task(':jitterStripMain').outcome, is(UP_TO_DATE))
         assertThat(result.task(':processResources').outcome, is(UP_TO_DATE))
-        assertThat(result.task(':jar').outcome, is(UP_TO_DATE))
+        // the runtime artifact replaces the plain jar in the assemble wiring
+        // since Gradle 9, so a build does not build the plain jar anymore
+        assertThat(result.task(':jitterJar').outcome, is(UP_TO_DATE))
+        assertThat(result.task(':jar'), is(nullValue()))
     }
 
     @Test

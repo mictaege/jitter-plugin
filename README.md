@@ -13,7 +13,7 @@ A common problem in software development is that one application has to be adopt
 
 Well known approaches to address this problem are _Forking_, _Feature-Toggles_ or - at least in the C-World - _Preprocessors_.
 
-_jitter_ uses Java Annotation Processing backed up by the Java analysis and transformation framework [Spoon](http://spoon.gforge.inria.fr/index.html). This way _jitter_ acts more like an _Preprocessor_ and transforms the source code before it's finally compiled, but is far more integrated in the Java language and eco-system because of the use of plain Java Annotations.
+_jitter_ removes flavour-specific code from the compiled classes with bytecode analysis and transformation ([ASM](https://asm.oxbs.io/)). This way _jitter_ acts more like a _Preprocessor_, but is far more integrated in the Java language and eco-system because of the use of plain Java Annotations - and since it works purely on the class file format, it is independent of the Java source syntax: it works with all javac-based JDK vendors and any language that compiles to JVM bytecode (Java, Kotlin, Groovy, records, sealed types etc.).
 
 In order to get a first impression of _jitter_ let's have a look on an extremely simplified example.
 
@@ -76,23 +76,35 @@ The benefits of the _jitter_ approach is that
 - conflicts and inconsistencies show up immediately at compile time
 - we can build distributions that are independent from further configurations and settings and absolutely identical to what runs in production
 
+## How it works
+
+The 150% model is compiled completely and untouched by the normal compiler - the whole project is a valid, consistent Java (and Kotlin, Groovy, ...) program in every flavour. After compilation _jitter_ removes the flavour-specific parts from the compiled classes:
+
+- Every source set gets a `jitterStrip<SrcSet>` task that runs after the compilation of its own source set and writes the stripped model to `build/jitter-stripped/<srcSet>` (the compiled classes stay untouched).
+- Compilation resolves against the full 150% model: other modules and downstream source sets compile against the compiled classes directories / the full jar (the compile artifacts), so every compile sees the complete model in every flavour.
+- Everything that ships or runs is stripped: `jitterJar` packages the stripped classes of the main source set together with the processed resources and replaces the plain jar as the runtime artifact (`runtimeElements`) - wars, test runtime and every other runtime consumer get the flavour variant. For the `war` task the classpath is wired to the stripped model as well. Test-like source sets are stripped too, with their output pointing at the stripped tree, so tests run against the same model that is deployed. Test fixtures keep the full jar as compile artifact and get a stripped `jitterTestFixturesJar` as runtime artifact.
+- `jitterVerifyMain` / `jitterVerify` check the stripped model for dangling references (see below).
+
+Because the stripping works on the class files, the source files and the line number tables of the surviving code are not touched at all - the debugger resolves to the original sources.
+
+The active flavour is a task input of the strip, verify, resource and jar tasks. Flavours can therefore be switched without a `clean`, the outputs are up-to-date checked and can be taken from the Gradle build cache.
 
 ## Usage with Gradle
 
-_jitter_ consists of two parts. First the _jitter-api_ which contains Java annotations like ```@OnlyIf``` that are used to mark up parts of the source code, second the _jitter-plugin_ which does the annotation processing and source code transformation. Through this separation your project will only have a dependency to the very small and lightweight _jitter-api_.
+_jitter_ consists of two parts. First the _jitter-api_ which contains Java annotations like ```@OnlyIf``` that are used to mark up parts of the source code, second the _jitter-plugin_ which does the bytecode stripping. Through this separation your project will only have a dependency to the very small and lightweight _jitter-api_.
 
 The [jitter-api](https://github.com/mictaege/jitter-api) is added as any other dependency in Gradle:
 
 ```Groovy
 dependencies {
-    compile "io.github.mictaege:jitter-api:X.X"
+    implementation "io.github.mictaege:jitter-api:X.X"
     //...
 }
-``` 
+```
 
 If this dependency is added the source code in the project could be marked up with the _jitter_ annotations like ```@OnlyIf```.
 
-To make the annotation processing and source code transformation happen you will also have to apply the _jitter-plugin_.
+To make the bytecode stripping happen you will also have to apply the _jitter-plugin_.
 
 ```Groovy
 plugins {
@@ -137,13 +149,13 @@ A complete example of a Gradle build using _jitter_ could be found in the [eval.
 
 Once _jitter_ is applied and the flavours of the application are configured the project now has an additional Gradle task for each configured flavour. In the example above these would be the tasks ```flavourCUSTOMER_A```, ```flavourCUSTOMER_B``` and ```flavourCUSTOMER_C```. These additional ```flavourXyz``` tasks are used to select the flavour which should be build or run.
 
-So for example if you like to build the _CUSTOMER_A_ flavour you have to type 
+So for example if you like to build the _CUSTOMER_A_ flavour you have to type
 
 ```Groovy
 gradle flavourCUSTOMER_A clean build
-``` 
+```
 
-**Note** If the application was build or run with another flavour before, the next build or run should always include a clean.
+**Note** Since the stripped output is flavour specific but up-to-date checked, a `clean` is not required when switching flavours - the strip tasks will simply run again for the newly selected flavour.
 
 In order to verify the 150% model the ```flavourXyz``` could be omitted. E.g.:
 
@@ -151,7 +163,7 @@ In order to verify the 150% model the ```flavourXyz``` could be omitted. E.g.:
 gradle clean test
 ```
 
-will execute all tests, even if a test is marked for a specific flavour.
+will execute all tests, even if a test is marked for a specific flavour. (Note that with no flavour active the classes are not stripped, so tests run against the full model.)
 
 It's also possible to select the flavour in a _gradle.properties_ file permanently
 
@@ -159,7 +171,28 @@ It's also possible to select the flavour in a _gradle.properties_ file permanent
 systemProp.jitter.active.flavour=CUSTOMER_A
 ```
 
-In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Such a permanently selected flavour in the _gradle.properties_ file will be overwritten by an explicit ```flavourXyz``` selection, so ```gradle flavourCUSTOMER_B clean build``` will build flavour _CUSTOMER_B_ even if flavour _CUSTOMER_A_ is defined in the _gradle.properties_ file. 
+In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Such a permanently selected flavour in the _gradle.properties_ file will be overwritten by an explicit ```flavourXyz``` selection, so ```gradle flavourCUSTOMER_B clean build``` will build flavour _CUSTOMER_B_ even if flavour _CUSTOMER_A_ is defined in the _gradle.properties_ file.
+
+### Task overview
+
+| Task | Purpose |
+|------|---------|
+| ```flavourXyz``` | Selects the active flavour for this build |
+| ```jitterStrip<SrcSet>``` | Strips the compiled classes of the source set to the active flavour (into ```build/jitter-stripped/<srcSet>```) |
+| ```jitterVerifyMain``` | Scoped verify: checks only the stripped main tree for dangling references, so artifact tasks fail early |
+| ```jitterVerify``` | Aggregate verify: checks everything that ships or runs; every ```Test``` and ```JavaExec``` task depends on it |
+| ```jitterJar``` | The stripped runtime artifact of the main source set (classes + resources), replaces the plain jar in the runtime variant |
+| ```jitterTestFixturesJar``` | The stripped runtime artifact of the main and test fixtures source sets |
+| ```reportCriticalTerms``` / ```verifyCriticalTerms``` | Critical term verification, see below |
+
+### Verification of dangling references
+
+In contrast to a source transformation, the 150% model is compiled as a whole, so the compiler itself does not reject references to flavour-specific code that is removed. The ```jitterVerify``` task closes this gap: it fails the build if any surviving class still references a removed class, field, method or enum constant. Known constructs that are not resolved automatically are reported as clear build errors, e.g.
+
+- anonymous inner classes declared inside ```@OnlyIf``` methods
+- synthetic ```access$NNN``` accessor orphans
+- ```$SwitchMap``` references from surviving switch statements
+- branchy field initializers (ternaries etc.) of removed fields
 
 ## _jitter_ Source Code Markup
 
@@ -170,7 +203,7 @@ Therefor it's a good practise to use String constants in the _jitter_ annotation
 ```Java
 @OnlyIf("CUSTOMER_A")
 private LocalDate birthday;
-``` 
+```
 
 A better way is to introduce a class which defines the known flavours of your application
 
@@ -185,7 +218,7 @@ public final class Flavour {
         super();
     }
 }
-``` 
+```
 
 and to use this constants in the mark up annotations
 
@@ -196,8 +229,7 @@ private LocalDate birthday;
 
 ### _@OnlyIf_
 
-_@OnlyIf_ marks that some code is only available if at least one of the given flavours is active. If none of the given flavours is active the marked source code will be removed. _@OnlyIf_ could be applied to types (classes, enums and interfaces), fields, constructors and methods.
-
+_@OnlyIf_ marks that some code is only available if at least one of the given flavours is active. If none of the given flavours is active the marked code will be removed. _@OnlyIf_ could be applied to types (classes, enums and interfaces), fields, constructors, methods and packages (package-info).
 
 ```Java
 @OnlyIf(Flavour.CUSTOMER_A)
@@ -208,7 +240,6 @@ private LocalDate birthday;
 @OnlyIf({Flavour.CUSTOMER_A, Flavour.CUSTOMER_C})
 private String nickName;
 ```
-
 
 ```Java
 @OnlyIf(Flavour.CUSTOMER_A)
@@ -237,15 +268,17 @@ public class PersonDaoBImpl implements PersonDaoIF {
 }
 ```
 
+The removal is aware of the typical compiler constructs around the removed member: enum constants are removed from the constant list and the surviving ordinals are renumbered exactly like a recompile would, compiler-generated ```lambda$<method>$*``` synthetic methods of removed methods are removed, and inline initializers of removed fields are removed from the constructors. The _jitter_ annotations themselves are stripped from the surviving bytecode, so the flavour model does not leak into the distribution.
+
 ### _@Fork_
 
-A _@Fork_ defines a variance in the applications control flow, therefore _@Fork's_  could only be applied to methods. 
+A _@Fork_ defines a variance in the applications control flow, therefore _@Fork's_  could only be applied to methods.
 
 ```Java
 @Fork(ifActive = Flavour.CUSTOMER_A, to = "initA")
 @Fork(ifActive = Flavour.CUSTOMER_B, to = "initDefault")
 @Fork(ifActive = Flavour.CUSTOMER_C, to = "initDefault")
-public void init(Strings[] args) { 
+public void init(Strings[] args) {
     initDefault(args);
 }
 
@@ -260,9 +293,9 @@ private void initDefault(Strings[] args) {
 }
 ```
 
-Here the ```init()``` method - which is used by the other parts of the application - will be replaced by the template method ```initA``` if the _CUSTOMER_A_ flavour is active, otherwise ```init()``` will be replaced with the template  method ```initDefault()```. 
+Here the ```init()``` method - which is used by the other parts of the application - will be replaced by the template method ```initA``` if the _CUSTOMER_A_ flavour is active, otherwise ```init()``` will be replaced with the template  method ```initDefault()```.
 
-The template methods - here ```initA``` and ```initDefault``` -  must have the same return type and parameter list (name and type) as the method to be replaced.
+The template methods - here ```initA``` and ```initDefault``` - must have the same return type and parameter list (name and type) as the method to be replaced. The body of the template method is moved into the slot method; name and modifiers of the slot method are kept, the template method is removed. If the referenced template method is missing or itself not part of the active flavour, the build fails with a clear error.
 
 ### _@Alter_
 
@@ -277,7 +310,7 @@ package myproject;
 @Alter(ifActive = Flavour.CUSTOMER_B, with = "PersonValidatorB")
 @Alter(ifActive = Flavour.CUSTOMER_C, with = "myproject.somewhereelse.PersonValidatorC")
 public class PersonValidator {
-    
+
     public void validate(Person person) {
         throw new IllegalStateException("Not implemented.");
     }
@@ -288,7 +321,7 @@ class PersonValidatorA {
     public void validate(Person person) {
         //..
     }
-}    
+}
 ```
 
 File _myproject/PersonValidatorB.java_
@@ -321,7 +354,7 @@ Here the ```PersonValidator``` class - which is used by the other parts of the a
 
 The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and ```PersonValidatorC``` - are linked with the ````with````flag of the ```@Alter``` annotation. If the template classes is inside the same package as the target class to be altered the template class could be linked with the simple name, otherwise the fully qualified name. Template classes could be declared in the same Java file as the target class - which is a common use case - but has to be a top level class since nested classes are not allowed.
 
-During replacement only the package, the simple name and the class visibility of the target class are transferred to the template class. All other parts of the class are resulting from the template class.
+During replacement only the package, the simple name and the class visibility of the target class are transferred to the template class. All other parts of the class are resulting from the template class. The template class itself is removed from the stripped model - it does not leak into the output - and the swapped class keeps the template's `SourceFile` attribute, so the debugger resolves it to the template's source file.
 
 Example:
 
@@ -332,7 +365,7 @@ package myproject;
 @Alter(ifActive = Flavour.CUSTOMER_B, with = "PersonValidatorB")
 @Alter(ifActive = Flavour.CUSTOMER_C, with = "myproject.somewhereelse.PersonValidatorC")
 public class PersonValidator {
-    
+
     public void validate(Person person) {
         throw new IllegalStateException("Not implemented.");
     }
@@ -348,10 +381,10 @@ final class PersonValidatorC extends AbstractValidator<Person> implements Observ
     protected void validate(final Person person) {
         //..
     }
-}    
+}
 ```
 
-Will result in the following code if the ```Flavour.CUSTOMER_C``` is active 
+Will result in the following code if the ```Flavour.CUSTOMER_C``` is active
 
 ```Java
 package myproject;
@@ -362,7 +395,7 @@ public final class PersonValidator extends AbstractValidator<Person> implements 
         //..
     }
 }
-```   
+```
 
 ## _jitter_ Resource Handling
 
@@ -370,11 +403,11 @@ public final class PersonValidator extends AbstractValidator<Person> implements 
 
 Any real-world application will not only contain Java source files, but also resources like property-, configuration- or other files and those resources my differ for each flavour of your application like the Java source files does.
 
-To make a resource file specific for a certain flavour with _jitter_ it's file name has to be suffixed with the name of the flavour. E.g. a specific version of ```Person.properties``` will have the name ```Person_CUSTOMER_B.properties```. Then _jitter_ makes the Gradle tasks _processResources_ and _processTestResources_ process such specific versions while they copy the resources. The active flavour is an input of these tasks and of the _spoon_ tasks, so they are executed again after the flavour has been switched - a ```clean``` is not required - and their outputs are up-to-date checked; the outputs of the _spoon_ tasks can also be taken from the Gradle build cache.
+To make a resource file specific for a certain flavour with _jitter_ it's file name has to be suffixed with the name of the flavour. E.g. a specific version of ```Person.properties``` will have the name ```Person_CUSTOMER_B.properties```. Then _jitter_ makes the Gradle tasks _processResources_ and _processTestResources_ process such specific versions while they copy the resources. The active flavour is an input of these tasks, so they are executed again after the flavour has been switched - a ```clean``` is not required - and their outputs are up-to-date checked.
 
 It may be the case that there is an unspecific and one or more specific version of the resource - e.g. ```Person.properties``` _and_ ```Person_CUSTOMER_B.properties``` are existing - or it may be the case that only specific versions of the resource are existing - e.g. ```Person_CUSTOMER_A.properties```, ```Person_CUSTOMER_B.properties``` and/or ```Person_CUSTOMER_C.properties```.
 
-If a flavour is active - e.g. ```flavourCUSTOMER_B``` - the specific resources that are belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` -  will be renamed by removing the flavour postfix - e.g. renamed to ```Person.properties```. If an unspecific version of the resource - e.g. ```Person.properties``` - already exist this resource will be overwritten by the specific one.
+If a flavour is active - e.g. ```flavourCUSTOMER_B``` - the specific resources that are belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` - will be renamed by removing the flavour postfix - e.g. renamed to ```Person.properties```. If an unspecific version of the resource - e.g. ```Person.properties``` - already exist this resource will be overwritten by the specific one.
 
 If another flavour is active ```flavourCUSTOMER_C```, all specific resources that are not belonging to the active flavour - e.g. ```Person_CUSTOMER_B.properties``` - will be omitted.
 
@@ -385,6 +418,20 @@ It's also possible to mark complete resource folders in the same way as single r
 ### Inverted flavour declaration
 
 It is also possible to declare a resource file or folder as flavour specific in an inverted way by using an ```!``` in front of the flavour postfix e.g.:  ```icons_!CUSTOMER_B```. In that case the files in ```icons_!CUSTOMER_B``` will be copied to a resource folder ```ìcons``` if the ```flavourCUSTOMER_B``` is **not** active.
+
+### Flavour gates in XML resources
+
+XML-ish resources (```xsd```, ```xjb```, ```xsl```, ```xslt```, ```wsdl```, ```xml```) can be gated by a _jitter_ annotation in their own content: every _jitter_ annotation found inside an ```appinfo``` section of the file gates the resource the same way the corresponding annotation gates a class - a resource whose gate does not include the active flavour is not part of that flavour's processed resources.
+
+```XML
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <xsd:annotation><xsd:appinfo>
+        @com.github.mictaege.jitter.api.OnlyIf("CUSTOMER_A")
+    </xsd:appinfo></xsd:annotation>
+</xsd:schema>
+```
+
+The mechanism is generic: it does not depend on any particular XML vocabulary, and the gate never renames a resource - unlike the flavour suffix convention it expresses presence or absence only. Files without a gate pass through unchanged. Note that xjc generation directives (```<annox:annotatePackage>@...OnlyIf(...)</annox:annotatePackage>``` and other ```annox:``` elements) are deliberately not resource gates: they belong to the generated class model, and a schema whose generated classes are flavour-gated can still be a runtime dependency of surviving code - e.g. as the ```xsd:import``` source of base types used by flavour-specific message schemas that validate against it.
 
 ## Verification of critical terms
 
@@ -397,7 +444,7 @@ jitter {
     flavour {
         name = 'CUSTOMER_A'
         criticalTerms {
-            patterns = ['\\b(?i)(a ltd.)\\b', '\\b(?i)(a ltd. germay)\\b']
+            patterns = ['\\\\b(?i)(a ltd.)\\\\b', '\\\\b(?i)(a ltd. germay)\\\\b']
             patterns << 'Hamburg'
             excludes << '**/*.html'
             includes << 'scripts/**'
@@ -407,7 +454,7 @@ jitter {
     flavour {
         name = 'CUSTOMER_B'
         criticalTerms {
-            patterns = ['\\b(?i)(b ltd.)\\b', '\\b(?i)(b ltd. germay)\\b']
+            patterns = ['\\\\b(?i)(b ltd.)\\\\b', '\\\\b(?i)(b ltd. germay)\\\\b']
         }
     }
 }
@@ -416,7 +463,7 @@ jitter {
 Explanation:
 - The ```patterns``` property takes a list of regular expression that declares the critical terms of this flavour. The critical terms could be declared at once using an array of expressions, or be added step by step using the left shift operator ```<<```. Please refer to the ```java.util.regex.Pattern``` documentation for details about the regular expressions.
 - The ```excludes``` property takes a list of file filters that will be applied to the _build_ directory in order to exclude certain resources from the verification. The file filters could be declared at once using an array of filters, or step by step using the left shift operator ```<<```. If the filters are only added with the left shift operator the defaults - ```'**/*.jpg', '**/*.jpeg', '**/*.png', '**/*.gif', '**/*.tif', '**/*.ico', '**/*.zip', '**/*.tar', '**/*.gz', '**/*.jar', '**/*.war', '**/*.ear'``` - will not be overwritten. Please refer to the gradle _FileTree_ documentation for details about file filters.
-- The ```includes``` property takes a list of file filters that will be applied to the _build_ directory in order to include certain resources to the verification. The file filters could be declared at once using an array of filters, or step by step using the left shift operator ```<<```. If the filters are only added with the left shift operator the defaults - ```''generated-sources/spoon/**', 'resources/**'``` - will not be overwritten. Please refer to the gradle _FileTree_ documentation for details about file filters.
+- The ```includes``` property takes a list of file filters that will be applied to the _build_ directory in order to include certain resources to the verification. The file filters could be declared at once using an array of filters, or step by step using the left shift operator ```<<```. If the filters are only added with the left shift operator the defaults - ```'jitter-stripped/**', 'resources/**'``` - will not be overwritten. Please refer to the gradle _FileTree_ documentation for details about file filters.
 - The ```sizeLimitKb``` property defines a limit in kilo bytes. Larger files which may slow down the verification process will not be verified at all. The default value is 250 KB.
 
 The verification for critical terms could be executed using the gradle tasks ```reportCriticalTerms``` or ```verifyCriticalTerms```. E.g:

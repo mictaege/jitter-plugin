@@ -1,7 +1,5 @@
 package com.github.mictaege.jitter.plugin
 
-import com.github.mictaege.spoon_gradle_plugin.SpoonExtension
-import com.github.mictaege.spoon_gradle_plugin.SpoonTask
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.tasks.JavaExec
@@ -23,10 +21,6 @@ class JitterPlugin implements Plugin<Project>  {
 
         project.configure(project) {
             apply plugin: 'java'
-        }
-
-        project.tasks.withType(SpoonTask).configureEach { task ->
-            dependOnActiveFlavour(project, task)
         }
 
         project.tasks.withType(ProcessResources).configureEach { task ->

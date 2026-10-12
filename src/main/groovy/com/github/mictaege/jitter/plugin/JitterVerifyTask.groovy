@@ -2,6 +2,7 @@ package com.github.mictaege.jitter.plugin
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
+import org.gradle.work.DisableCachingByDefault
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
 
@@ -10,6 +11,7 @@ import org.gradle.api.tasks.TaskAction
  * any removed flavour specific class or member anymore. This keeps the
  * guarantee that conflicts and inconsistencies show up at build time.
  */
+@DisableCachingByDefault(because = "the verification is a build check over the stripped model and should always run")
 class JitterVerifyTask extends DefaultTask {
 
     @Internal

@@ -22,7 +22,7 @@ gradlePlugin {
             displayName = "Jitter Plugin"
             description = "The jitter-plugin is a Gradle plugin to build and distribute different flavours of an application from a single source base."
             implementationClass = "com.github.mictaege.jitter.plugin.JitterPlugin"
-            tags.set(listOf("spoon"))
+            tags.set(listOf("flavours", "bytecode"))
         }
     }
 }
@@ -38,10 +38,8 @@ repositories {
 
 dependencies {
     implementation(gradleApi())
-    implementation("io.github.mictaege:spoon-gradle-plugin:2026.2")
     implementation("io.github.mictaege:jitter-api:2026.2")
     implementation("com.google.guava:guava:33.4.8-jre")
-    implementation("org.eclipse.jdt:org.eclipse.jdt.core:3.39.0")
     implementation("org.ow2.asm:asm:9.10.1")
     implementation("org.ow2.asm:asm-commons:9.10.1")
     implementation("org.ow2.asm:asm-tree:9.10.1")

@@ -3,10 +3,12 @@ package com.github.mictaege.jitter.plugin
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.FileTree
+import org.gradle.work.DisableCachingByDefault
 import org.gradle.api.tasks.TaskAction
 
 import java.util.regex.Pattern
 
+@DisableCachingByDefault(because = "the verification is a build check over the build directory and should always run")
 abstract class AbstractCriticalTermsTask extends DefaultTask {
 
     @TaskAction
@@ -43,6 +45,7 @@ abstract class AbstractCriticalTermsTask extends DefaultTask {
 
 }
 
+@DisableCachingByDefault(because = "the verification is a build check over the build directory and should always run")
 class VerifyCriticalTermsTask extends AbstractCriticalTermsTask {
 
     void onViolations() {
@@ -51,6 +54,7 @@ class VerifyCriticalTermsTask extends AbstractCriticalTermsTask {
 
 }
 
+@DisableCachingByDefault(because = "the report is a build check over the build directory and should always run")
 class ReportCriticalTermsTask extends AbstractCriticalTermsTask {
 
     void onViolations() {
