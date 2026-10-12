@@ -370,7 +370,7 @@ public final class PersonValidator extends AbstractValidator<Person> implements 
 
 Any real-world application will not only contain Java source files, but also resources like property-, configuration- or other files and those resources my differ for each flavour of your application like the Java source files does.
 
-To make a resource file specific for a certain flavour with _jitter_ it's file name has to be suffixed with the name of the flavour. E.g. a specific version of ```Person.properties``` will have the name ```Person_CUSTOMER_B.properties```. Then _jitter_ forces Gradle to process such specific versions every time the tasks _processResources_ or _processTestResources_ are executed.
+To make a resource file specific for a certain flavour with _jitter_ it's file name has to be suffixed with the name of the flavour. E.g. a specific version of ```Person.properties``` will have the name ```Person_CUSTOMER_B.properties```. Then _jitter_ makes the Gradle tasks _processResources_ and _processTestResources_ process such specific versions while they copy the resources. The active flavour is an input of these tasks and of the _spoon_ tasks, so they are executed again after the flavour has been switched - a ```clean``` is not required - and their outputs are up-to-date checked; the outputs of the _spoon_ tasks can also be taken from the Gradle build cache.
 
 It may be the case that there is an unspecific and one or more specific version of the resource - e.g. ```Person.properties``` _and_ ```Person_CUSTOMER_B.properties``` are existing - or it may be the case that only specific versions of the resource are existing - e.g. ```Person_CUSTOMER_A.properties```, ```Person_CUSTOMER_B.properties``` and/or ```Person_CUSTOMER_C.properties```.
 
