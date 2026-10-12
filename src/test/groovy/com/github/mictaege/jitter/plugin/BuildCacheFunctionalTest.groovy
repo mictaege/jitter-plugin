@@ -154,9 +154,7 @@ class BuildCacheFunctionalTest {
         def original = prj
         prj = tmp.resolve('relocated')
         ['settings.gradle', 'build.gradle', 'src'].each { name ->
-            new AntBuilder().copy(todir: prj.resolve(name).parent.toFile()) {
-                fileset(dir: original.toFile(), includes: "${name}, ${name}/**")
-            }
+            copyTree(original.resolve(name), prj.resolve(name))
         }
 
         def result = run('--build-cache', 'flavourA', 'compileJava')
@@ -192,6 +190,25 @@ class BuildCacheFunctionalTest {
         def file = prj.resolve(path)
         Files.createDirectories(file.parent)
         file.text = content.stripIndent().trim()
+    }
+
+    private static void copyTree(Path from, Path to) {
+        if (Files.isDirectory(from)) {
+            Files.walk(from).withCloseable { paths ->
+                paths.forEach { source ->
+                    def target = to.resolve(from.relativize(source).toString())
+                    if (Files.isDirectory(source)) {
+                        Files.createDirectories(target)
+                    } else {
+                        Files.createDirectories(target.parent)
+                        Files.copy(source, target)
+                    }
+                }
+            }
+        } else {
+            Files.createDirectories(to.parent)
+            Files.copy(from, to)
+        }
     }
 
 }
