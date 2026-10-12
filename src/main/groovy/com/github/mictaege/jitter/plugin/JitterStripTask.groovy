@@ -2,11 +2,14 @@ package com.github.mictaege.jitter.plugin
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.FileCollection
+import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 
 /**
@@ -18,8 +21,14 @@ import org.gradle.api.tasks.TaskAction
  * while packaging and runtime consume the stripped model. Without an
  * output directory the classes are stripped in place.
  */
+@CacheableTask
 class JitterStripTask extends DefaultTask {
 
+    /**
+     * Relative path sensitivity, so the stripped model can also be taken
+     * from the build cache when the project lives at another location.
+     */
+    @PathSensitive(PathSensitivity.RELATIVE)
     @InputFiles
     Set<File> classesDirs = []
 

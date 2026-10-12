@@ -12,6 +12,9 @@ import static org.gradle.api.file.DuplicatesStrategy.EXCLUDE
  * Makes a {@link ProcessResources} task omit the resources of the inactive flavours and gives the resources of the
  * active flavour their final name.
  * <p>
+ * Resources of the inactive flavours are recognized either by the name suffix convention (`_`flavour`/_!`flavour)
+ * or by a jitter gate in the content of an XML-ish resource (see {@link XmlResourceGate}).
+ * <p>
  * All of this happens while the task copies the resources. Changing the output of the task after it has been executed
  * would make it out-of-date in the next build, since Gradle has already taken a snapshot of the output by then.
  */
@@ -30,7 +33,7 @@ final class FlavouredResources {
         JitterPlugin.dependOnActiveFlavour(project, task)
         task.duplicatesStrategy = EXCLUDE
         task.includeEmptyDirs = false
-        task.exclude { FileTreeElement element -> omitted(element.name, flavourNames()) }
+        task.exclude { FileTreeElement element -> omitted(element.name, flavourNames()) || gated(element) }
         task.doFirst {
             winners = null
         }
@@ -48,6 +51,23 @@ final class FlavouredResources {
     }
 
     /**
+     * Is the element a resource that carries a flavour gate in its own content (see
+     * {@link XmlResourceGate}) and does the gate not include the active flavour? The suffix
+     * convention above renames a per-flavour variant into place; a content gate expresses that
+     * the resource does not exist at all in the other flavours.
+     */
+    private static boolean gated(final FileTreeElement element) {
+        if (element.directory || element.file == null || !JitterUtil.anyFlavour()) {
+            return false
+        }
+        if (!XmlResourceGate.isXml(element.name)) {
+            return false
+        }
+        final List<String> flavours = XmlResourceGate.flavours(element.file)
+        return flavours != null && flavours.every { flavour -> !JitterUtil.active(flavour) }
+    }
+
+    /**
      * Several resources may end up with the same final path, e.g. `Person.properties` and `Person_A.properties`. The
      * most specific one wins, which is the one that loses most of it's path. Among equally specific resources the last
      * one wins.
@@ -55,7 +75,7 @@ final class FlavouredResources {
     private static Map<String, String> findWinners(final ProcessResources task, final List<String> flavourNames) {
         def winners = new HashMap<String, String>()
         task.source.visit { FileVisitDetails source ->
-            if (!source.directory) {
+            if (!source.directory && !gated(source)) {
                 def sourcePath = source.relativePath.pathString
                 def path = finalPath(sourcePath, flavourNames)
                 def winner = winners[path]

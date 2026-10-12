@@ -79,13 +79,22 @@ class BuildCacheFunctionalTest {
         write('src/main/resources/sub/others_!A/two.txt', 'not for A')
         write('src/main/resources/both_A/three.txt', 'specific folder')
         write('src/main/resources/both_A/three_A.txt', 'specific folder and file')
+        // flavour gate in the resource's own content instead of a name suffix
+        write('src/main/resources/schema.xsd', """
+            <xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+                <xsd:annotation><xsd:appinfo>
+                    @com.github.mictaege.jitter.api.OnlyIf("A")
+                </xsd:appinfo></xsd:annotation>
+            </xsd:schema>
+        """)
     }
 
     @Test
     void shouldProcessResourcesOfActiveFlavour() {
         run('flavourA', 'processResources')
 
-        assertThat(resources(), containsInAnyOrder('plain.txt', 'msg.properties', 'icons/one.txt', 'both/three.txt'))
+        assertThat(resources(), containsInAnyOrder('plain.txt', 'msg.properties', 'icons/one.txt',
+                'both/three.txt', 'schema.xsd'))
         assertThat(resource('msg.properties'), is('specific for A'))
         assertThat(resource('both/three.txt'), is('specific folder and file'))
     }
@@ -110,47 +119,47 @@ class BuildCacheFunctionalTest {
 
     @Test
     void shouldBeUpToDateAfterCleanBuild() {
-        run('flavourA', 'clean', 'build')
+        run('flavourA', 'clean', 'build', 'jitterStripMain')
 
-        def result = run('flavourA', 'build')
+        def result = run('flavourA', 'build', 'jitterStripMain')
 
-        assertThat(result.task(':spoonMain').outcome, is(UP_TO_DATE))
+        assertThat(result.task(':jitterStripMain').outcome, is(UP_TO_DATE))
         assertThat(result.task(':processResources').outcome, is(UP_TO_DATE))
         assertThat(result.task(':jar').outcome, is(UP_TO_DATE))
     }
 
     @Test
-    void shouldTakeSpoonedSourcesFromBuildCache() {
-        run('--build-cache', 'flavourA', 'compileJava')
+    void shouldTakeStrippedModelFromBuildCache() {
+        run('--build-cache', 'flavourA', 'jitterStripMain')
 
-        def result = run('--build-cache', 'flavourA', 'clean', 'compileJava')
+        def result = run('--build-cache', 'flavourA', 'clean', 'jitterStripMain')
 
-        assertThat(result.task(':spoonMain').outcome, is(FROM_CACHE))
-        assertThat(spooned('fixture/Greeter.java'), containsString('helloA'))
-        assertThat(spooned('fixture/Greeter.java'), not(containsString('helloB')))
-        assertThat(spooned('fixture/Unflavoured.java'), containsString('Unflavoured'))
+        assertThat(result.task(':jitterStripMain').outcome, is(FROM_CACHE))
+        assertThat(stripped('fixture/Greeter.class'), containsString('helloA'))
+        assertThat(stripped('fixture/Greeter.class'), not(containsString('helloB')))
+        assertThat(stripped('fixture/Unflavoured.class'), containsString('Unflavoured'))
     }
 
     @Test
-    void shouldSpoonAgainForOtherFlavourWithoutClean() {
-        run('--build-cache', 'flavourA', 'compileJava')
+    void shouldStripAgainForOtherFlavourWithoutClean() {
+        run('--build-cache', 'flavourA', 'jitterStripMain')
 
-        def other = run('--build-cache', 'flavourB', 'compileJava')
+        def other = run('--build-cache', 'flavourB', 'jitterStripMain')
 
-        assertThat(other.task(':spoonMain').outcome, is(SUCCESS))
-        assertThat(spooned('fixture/Greeter.java'), containsString('helloB'))
-        assertThat(spooned('fixture/Greeter.java'), not(containsString('helloA')))
+        assertThat(other.task(':jitterStripMain').outcome, is(SUCCESS))
+        assertThat(stripped('fixture/Greeter.class'), containsString('helloB'))
+        assertThat(stripped('fixture/Greeter.class'), not(containsString('helloA')))
 
-        def back = run('--build-cache', 'flavourA', 'compileJava')
+        def back = run('--build-cache', 'flavourA', 'jitterStripMain')
 
-        assertThat(back.task(':spoonMain').outcome, is(FROM_CACHE))
-        assertThat(spooned('fixture/Greeter.java'), containsString('helloA'))
-        assertThat(spooned('fixture/Greeter.java'), not(containsString('helloB')))
+        assertThat(back.task(':jitterStripMain').outcome, is(FROM_CACHE))
+        assertThat(stripped('fixture/Greeter.class'), containsString('helloA'))
+        assertThat(stripped('fixture/Greeter.class'), not(containsString('helloB')))
     }
 
     @Test
-    void shouldTakeSpoonedSourcesFromBuildCacheInOtherLocation() {
-        run('--build-cache', 'flavourA', 'compileJava')
+    void shouldTakeStrippedModelFromBuildCacheInOtherLocation() {
+        run('--build-cache', 'flavourA', 'jitterStripMain')
         def original = prj
         prj = tmp.resolve('relocated')
         ['settings.gradle', 'build.gradle', 'src'].each { name ->
@@ -159,9 +168,9 @@ class BuildCacheFunctionalTest {
             }
         }
 
-        def result = run('--build-cache', 'flavourA', 'compileJava')
+        def result = run('--build-cache', 'flavourA', 'jitterStripMain')
 
-        assertThat(result.task(':spoonMain').outcome, is(FROM_CACHE))
+        assertThat(result.task(':jitterStripMain').outcome, is(FROM_CACHE))
     }
 
     private BuildResult run(String... args) {
@@ -184,8 +193,8 @@ class BuildCacheFunctionalTest {
         prj.resolve('build/resources/main').resolve(path).text
     }
 
-    private String spooned(String path) {
-        prj.resolve('build/generated-sources/spoon/main').resolve(path).text
+    private String stripped(String path) {
+        prj.resolve('build/jitter-stripped/main').resolve(path).getText('ISO-8859-1')
     }
 
     private void write(String path, String content) {

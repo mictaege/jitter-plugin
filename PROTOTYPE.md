@@ -685,6 +685,50 @@ exactly ONE restoration - `ImportPaymentData` - across the whole build
 stripped Dba `ImportPaymentData` carries the public default ctor, the
 BMX fields are gone. Bmx unaffected (ctor survives, nothing restored).
 
+## Develop merge integration (2026-10-12): FlavouredResources replaces the listener
+
+Develop's #46 (`493be29`) replaced the `ProcessResourcesListener` with
+`FlavouredResources`: resources are excluded/renamed WHILE the task
+copies them (the listener modified the output after Gradle had taken its
+snapshot, so every build after a clean build was out-of-date), the
+active flavour became an input of `ProcessResources` and the spoon
+tasks, and `flavourXyz` is selected at configuration time. All good
+improvements, adopted as-is - but the merge resolution left OUR
+extension of the listener (the XmlResourceGate wiring) disconnected: the
+annotation-gated resources would have shipped in every flavour again.
+
+Integration:
+- `FlavouredResources` now also excludes resources whose own content
+  carries an inactive flavour gate (`XmlResourceGate`), at copy time,
+  and the winner determination of same-path resources skips gated
+  files (an excluded file must not win a path). The suffix convention
+  (per-flavour content variants) and the content gate (presence or
+  absence) remain the two mechanisms, now both copy-time.
+- `ProcessResourcesListener` is deleted - dead code after the merge.
+- `JitterStripTask` is `@CacheableTask` with
+  `@PathSensitive(PathSensitivity.RELATIVE)` class dirs: the stripped
+  model can come from the build cache, also across project locations.
+- Develop's `BuildCacheFunctionalTest` (asserted on `:spoonMain`, which
+  this branch has retired) is adapted to the strip pipeline:
+  `:jitterStripMain`, content assertions on the stripped class files,
+  plus a functionally gated XML resource in the fixture (present for
+  the active flavour, excluded for the other).
+
+Observation (pre-dating the merge, needs a decision later): Gradle does
+not reliably remove resources of the previous flavour from
+`build/resources` when the flavour switches WITHOUT a clean - stale
+leftovers stay in the directory and could be packaged. Flavour switches
+in ologis always run `clean ...`, so this is latent; develop's #46 claim
+"no clean required" holds for the up-to-date checks, but the resource
+directories should be watched.
+
+Verified: plugin suite 70 green (7 functional tests: up-to-date after
+clean build, build cache incl. relocation, flavour switch without
+clean, suffix resources, content-gated resource, system-property
+flavour); ologis Dba `clean compileAll` green; Bmx resource shape
+correct with fresh outputs (only the ungated mfr base.xsd, no
+Dba-gated MFR schemas, no Mpk-gated sitefs schemas).
+
 ## Annotation-gated resources (2026-10): one mechanism for classes and resources
 
 Closes the last gap of the suffix convention: XML resources can now carry
