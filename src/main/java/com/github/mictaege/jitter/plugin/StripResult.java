@@ -20,6 +20,13 @@ public final class StripResult {
     private final List<String> errors = new ArrayList<>();
     private final List<String> infos = new ArrayList<>();
 
+    /**
+     * The key a removed member is recorded under: {@code owner.name + descriptor}.
+     */
+    public static String memberKey(final String owner, final String name, final String desc) {
+        return owner + "." + name + desc;
+    }
+
     public void merge(final StripResult other) {
         removedClasses.addAll(other.removedClasses);
         removedMembers.addAll(other.removedMembers);
