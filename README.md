@@ -180,6 +180,7 @@ In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Su
 | ```flavourXyz``` | Selects the active flavour for this build |
 | ```jitterStrip<SrcSet>``` | Strips the compiled classes of the source set to the active flavour (into ```build/jitter-stripped/<srcSet>```) |
 | ```jitterVerifyMain``` | Scoped verify: checks only the stripped main tree for dangling references, so artifact tasks fail early |
+| ```jitterVerifyTestFixtures``` | Scoped verify of the stripped main + test fixtures trees (the content of the ```jitterTestFixturesJar``` artifact) |
 | ```jitterVerify``` | Aggregate verify: checks everything that ships or runs; every ```Test``` and ```JavaExec``` task depends on it |
 | ```jitterJar``` | The stripped runtime artifact of the main source set (classes + resources), replaces the plain jar in the runtime variant |
 | ```jitterTestFixturesJar``` | The stripped runtime artifact of the main and test fixtures source sets |
@@ -187,12 +188,19 @@ In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Su
 
 ### Verification of dangling references
 
-In contrast to a source transformation, the 150% model is compiled as a whole, so the compiler itself does not reject references to flavour-specific code that is removed. The ```jitterVerify``` task closes this gap: it fails the build if any surviving class still references a removed class, field, method or enum constant. Known constructs that are not resolved automatically are reported as clear build errors, e.g.
+In contrast to a source transformation, the 150% model is compiled as a whole, so the compiler itself does not reject references to flavour-specific code that is removed. The verify tasks close this gap: they fail the build if any surviving class still references a removed class, field, method or enum constant.
+
+The removals of the module's own stripping are known via the strip tasks. In addition, every stripped source set writes a removal manifest into the stripped tree (```META-INF/jitter/<srcSet>-removed.txt```), which travels inside the stripped runtime artifacts (```jitterJar```, ```jitterTestFixturesJar```). The verify tasks read the manifests of the flavour dependencies from the runtime classpath and check the surviving classes against them, so dangling references across module boundaries are caught as well - the check the source transformation got for free, because dependent modules were compiled against the already transformed sources.
+
+One construct is deliberately tolerated: javac's switch map classes (```Outer$N``` with a ```$SwitchMap$...``` field) GETSTATIC every enum constant of the switches of the source inside a ```NoSuchFieldError``` handler, so constants that a flavour dependency removed are tolerated at runtime by design - such references are not violations. Known constructs that are not resolved automatically are reported as clear build errors, e.g.
 
 - anonymous inner classes declared inside ```@OnlyIf``` methods
 - synthetic ```access$NNN``` accessor orphans
-- ```$SwitchMap``` references from surviving switch statements
 - branchy field initializers (ternaries etc.) of removed fields
+
+### Stale resources
+
+A resource whose owner class has been removed by the active flavour still ships: flavour specific resources usually follow the flavour suffix convention and are dropped by the resource processing, but an unsuffixed resource of a gated class is no longer reachable through the classpath. The verify tasks report such resources as warnings (```resource X ships without its owner class Y```) - candidates for review, not necessarily errors.
 
 ## _jitter_ Source Code Markup
 

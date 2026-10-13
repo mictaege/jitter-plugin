@@ -37,6 +37,10 @@ class JitterStripTask extends DefaultTask {
     @OutputDirectory
     File outputDir
 
+    /** Name of the source set, used for the removal manifest inside the stripped tree. */
+    @Internal
+    String manifestName
+
     /** Classpath for @Alter templates that live in dependent libraries. */
     @Internal
     FileCollection templateClasspath
@@ -73,6 +77,13 @@ class JitterStripTask extends DefaultTask {
         stripResult.infos.each { logger.lifecycle(it) }
         if (!stripResult.errors.isEmpty()) {
             stripResult.errors.each { logger.error(it) }
+        }
+        // the removal manifest travels in the stripped tree, so it ends up in
+        // the stripped runtime artifacts; consumers read it from the classpath
+        // to verify their own classes against these removals
+        if (outputDir != null && manifestName != null) {
+            RemovalManifest.write(new File(outputDir, RemovalManifest.DIR + manifestName + RemovalManifest.SUFFIX).toPath(),
+                    activeFlavour, stripResult)
         }
     }
 

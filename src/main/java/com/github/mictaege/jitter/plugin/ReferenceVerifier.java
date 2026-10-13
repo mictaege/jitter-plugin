@@ -75,10 +75,33 @@ public final class ReferenceVerifier {
         }
         new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
 
+            /**
+             * A javac switch map class: its {@code <clinit>} GETSTATICs every
+             * enum constant of the switches of the source, inside a
+             * {@code NoSuchFieldError} handler, so missing constants are
+             * tolerated at runtime by design - also constants that a flavour
+             * dependency removed (the stripper only cleans the entries of the
+             * constants its own module removed). References to removed enum
+             * constant FIELDS from such a {@code <clinit>} are therefore not
+             * dangling violations; class references stay checked.
+             */
+            private final boolean[] switchMap = {false};
+
+            @Override
+            public org.objectweb.asm.FieldVisitor visitField(final int access, final String name,
+                                                             final String descriptor, final String signature,
+                                                             final Object value) {
+                if (name.startsWith("$SwitchMap$")) {
+                    switchMap[0] = true;
+                }
+                return null;
+            }
+
             @Override
             public MethodVisitor visitMethod(final int access, final String name,
                                              final String descriptor, final String signature,
                                              final String[] exceptions) {
+                final boolean tolerant = switchMap[0] && name.equals("<clinit>");
                 return new MethodVisitor(Opcodes.ASM9) {
 
                     @Override
@@ -93,7 +116,9 @@ public final class ReferenceVerifier {
                     public void visitFieldInsn(final int opcode, final String owner,
                                                final String name, final String descriptor) {
                         checkClassReference(owner);
-                        checkMemberReference(owner, name, descriptor, "accesses removed field", "#");
+                        if (!tolerant) {
+                            checkMemberReference(owner, name, descriptor, "accesses removed field", "#");
+                        }
                     }
 
                     @Override

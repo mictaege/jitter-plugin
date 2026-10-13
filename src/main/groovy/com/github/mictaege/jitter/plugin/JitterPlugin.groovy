@@ -39,6 +39,8 @@ class JitterPlugin implements Plugin<Project>  {
         project.afterEvaluate({ ->
             def stripTasks = []
             def allClassesDirs = [] as Set
+            def allResourcesDirs = [] as Set
+            def manifestClasspath = project.files()
 
             project.sourceSets.all { srcSet ->
                 // the flavour-stripped model is the default output of the
@@ -51,9 +53,16 @@ class JitterPlugin implements Plugin<Project>  {
                     stripTask.classesDirs = srcSet.output.classesDirs.files
                     stripTask.templateClasspath = srcSet.compileClasspath
                     stripTask.dependsOn srcSet.compileJavaTaskName
+                    stripTask.manifestName = srcSet.name
                     stripTasks << stripTask
 
                     stripTask.outputDir = new File(project.buildDir, "jitter-stripped/${srcSet.name}")
+                    // the runtime classpath carries the removal manifests of
+                    // the flavour dependencies (their stripped runtime
+                    // artifacts); collecting it per source set lets the
+                    // aggregate verify check the surviving classes against
+                    // the removals of the modules this one depends on
+                    manifestClasspath = manifestClasspath + srcSet.runtimeClasspath
                     if (srcSet.name != 'main' && srcSet.name != 'testFixtures') {
                         // test-like source sets: the stripped model is their
                         // runtime, so the source set output points at the
@@ -81,6 +90,11 @@ class JitterPlugin implements Plugin<Project>  {
                 } else {
                     allClassesDirs.addAll(srcSet.output.classesDirs.files)
                 }
+                // for the stale resource report of the aggregate verify
+                if (!project.jitter.excludeSrcSets.contains(srcSet.name)
+                        && srcSet.output.resourcesDir != null) {
+                    allResourcesDirs.add(srcSet.output.resourcesDir)
+                }
             }
 
             if (!stripTasks.isEmpty()) {
@@ -95,12 +109,16 @@ class JitterPlugin implements Plugin<Project>  {
                     mainVerify = project.task('jitterVerifyMain', type: JitterVerifyTask)
                     mainVerify.stripTasks = [mainStrip]
                     mainVerify.allClassesDirs = [mainStrip.outputDir]
+                    mainVerify.allResourcesDirs = [project.sourceSets.main.output.resourcesDir]
+                    mainVerify.dependencyClasspath = project.sourceSets.main.runtimeClasspath
                     mainVerify.dependsOn mainStrip
                 }
 
                 def verifyTask = project.task("jitterVerify", type: JitterVerifyTask)
                 verifyTask.stripTasks = stripTasks
                 verifyTask.allClassesDirs = allClassesDirs
+                verifyTask.allResourcesDirs = allResourcesDirs
+                verifyTask.dependencyClasspath = manifestClasspath
                 verifyTask.dependsOn stripTasks
 
                 project.tasks.withType(Test).configureEach { it.dependsOn verifyTask }
@@ -151,6 +169,20 @@ class JitterPlugin implements Plugin<Project>  {
                 def fixturesStrip = project.tasks.findByName('jitterStripTestFixtures')
                 if (fixturesStrip != null && fixturesStrip.outputDir != null
                         && mainStrip != null && mainStrip.outputDir != null) {
+                    // the scoped verify of the test fixtures artifact: checks
+                    // the stripped main and test fixtures trees - the content
+                    // of the artifact - against the removals of main and test
+                    // fixtures and of the flavour dependencies, so the
+                    // artifact task fails early on dangling references
+                    def fixturesVerify = project.task('jitterVerifyTestFixtures', type: JitterVerifyTask)
+                    fixturesVerify.stripTasks = [mainStrip, fixturesStrip]
+                    fixturesVerify.allClassesDirs = [mainStrip.outputDir, fixturesStrip.outputDir]
+                    fixturesVerify.allResourcesDirs = [project.sourceSets.main.output.resourcesDir,
+                                                       project.sourceSets.testFixtures.output.resourcesDir]
+                    fixturesVerify.dependencyClasspath = (project.sourceSets.main.runtimeClasspath
+                            + project.sourceSets.testFixtures.runtimeClasspath)
+                    fixturesVerify.dependsOn mainStrip, fixturesStrip
+
                     def strippedFixturesJar = project.tasks.create('jitterTestFixturesJar',
                             org.gradle.api.tasks.bundling.Jar) {
                         destinationDirectory = new File(project.buildDir, 'jitter-libs')
@@ -163,6 +195,7 @@ class JitterPlugin implements Plugin<Project>  {
                         from(project.sourceSets.testFixtures.output.resourcesDir)
                         dependsOn mainStrip, fixturesStrip
                     }
+                    strippedFixturesJar.dependsOn fixturesVerify
                     strippedFixturesJar.dependsOn project.tasks.named(
                             project.sourceSets.main.processResourcesTaskName)
                     strippedFixturesJar.dependsOn project.tasks.named(
