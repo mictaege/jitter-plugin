@@ -44,9 +44,10 @@ class JitterStripTask extends DefaultTask {
     @Internal
     StripResult stripResult = new StripResult()
 
+    /** The active flavour, empty if no flavour is selected (the 150% model). */
     @Input
     String getActiveFlavour() {
-        System.getProperty(JitterUtil.FLAVOUR_PROP)
+        System.getProperty(JitterUtil.FLAVOUR_PROP) ?: ''
     }
 
     @TaskAction
