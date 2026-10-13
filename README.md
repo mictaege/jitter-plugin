@@ -7,6 +7,43 @@
 
 A simple but complete example how _jitter_ works could be found at [eval.jitter](https://github.com/mictaege/eval.jitter). It's strongly recommended to check out this repository and to have also a closer look on the examples provided there.
 
+<details>
+<summary><b>Important notes!!! With release 2026.3 the Spoon source transformation is gone, jitter strips bytecode now</b></summary>
+
+## The transformation moved from sources to class files
+
+Until 2026.3 the flavour model was produced by transforming the Java sources with Spoon before compilation. 2026.3 compiles the complete 150% model untouched and removes the flavour-specific code from the compiled classes with bytecode analysis (ASM):
+
+- works with every language that compiles to JVM bytecode (Java, Kotlin, Groovy) and every javac syntax level - the stripper couples to the class file format, not the source syntax
+- the sources are never touched: line number tables of surviving code stay intact, hot code replacement works, the debugger resolves to the original sources
+- roughly half the build work of the source transformation, because nothing is recompiled after the flavouring
+
+## Breaking changes
+
+1. The 150% model must be self-consistent. The whole project must compile as one program, in every flavour. Inconsistent flavour usage that the per-flavour source transformation silently tolerated now fails the compile - deliberately: it was invisible inconsistency.
+2. Two-artifact design: downstream modules compile against the FULL model (classes directories / full jar) and run against the stripped artifacts (`jitterJar` replaces `runtimeElements`, `jitterTestFixturesJar` replaces `testFixturesRuntimeElements`). Consumers see the flavour model at runtime and the full model at compile time.
+3. `@Fork` and `@Alter` are strict now: a missing or inaccessible template fails the build. The source transformation logged the same problems and silently produced an empty flavour method - one long-masked real bug surfaced this way in our reference consumer.
+4. New verification: `jitterVerify` fails the build if surviving code references removed classes or members - within the module AND across module boundaries (removal manifests travel inside the stripped artifacts). javac switch map references to removed enum constants are tolerated as javac intends.
+5. The plain build (no flavour active) works again under Gradle 9.8.
+6. Spoon configuration is gone: the `compliance` property and all spoon task references are obsolete.
+
+## New
+
+- Source set roles DSL: `packagingSrcSets` (default `main`), `apiSrcSets` (default `testFixtures`), everything else test-like. Custom layouts are supported and validated (role overlap is an error, unknown names and unreachable stripped artifacts warn).
+- Scoped `jitterVerifyTestFixtures` / `jitterVerify<Name>` tasks: artifact tasks fail early on dangling references.
+- Stale resource report: resources whose owner class was removed ship anyway; the verify tasks report them as warnings.
+- Flavour switching without clean; all flavour-specific outputs are up-to-date checked, build-cache safe, and the verification reads removals from the cached manifests.
+
+## Migration
+
+- Remove the `compliance` property and spoon task wiring from the build.
+- Critical term verification: retarget includes from `generated-sources/spoon/**` to `jitter-stripped/**`.
+- Expect clear `jitterVerify` errors where the old pipeline masked inconsistencies - they point at real flavour bugs.
+- Code in forked JVMs that needs the active flavour reads the system property `jitter.active.flavour`; pass it explicitly (see below).
+- [eval.jitter](https://github.com/mictaege/eval.jitter) demonstrates the complete feature set, including a library with a custom api source set.
+
+</details>
+
 ## Problem
 
 A common problem in software development is that one application has to be adopted for different needs, e.g. the application has to be customized for different customers.
