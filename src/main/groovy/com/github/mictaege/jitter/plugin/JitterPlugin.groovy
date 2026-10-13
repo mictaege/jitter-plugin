@@ -59,6 +59,25 @@ class JitterPlugin implements Plugin<Project>  {
                     stripTasks << stripTask
 
                     stripTask.outputDir = new File(project.buildDir, "jitter-stripped/${srcSet.name}")
+
+                    // the dejittered source variant: the original sources
+                    // minus the flavour specific code of the active flavour,
+                    // as source level surgery that keeps comments, formatting
+                    // and line numbers - for source deliveries. Its removals
+                    // are cross checked against the manifest of the stripped
+                    // model, so it runs after the strip task
+                    def dejitterTask = project.task(
+                            "dejitter${srcSet.name.capitalize()}", type: JitterDejitterTask)
+                    dejitterTask.sourceDirs = srcSet.java.srcDirs
+                    def resourcesDir = srcSet.output.resourcesDir
+                    if (resourcesDir != null) {
+                        dejitterTask.resourceDirs = [resourcesDir]
+                    }
+                    dejitterTask.compileClasspath = srcSet.compileClasspath
+                    dejitterTask.manifestFile = new File(project.buildDir,
+                            "jitter-stripped/${srcSet.name}/META-INF/jitter/${srcSet.name}-removed.txt")
+                    dejitterTask.dependsOn stripTask, project.tasks.named(srcSet.processResourcesTaskName)
+                    dejitterTask.outputDir = new File(project.buildDir, "jitter-dejittered/${srcSet.name}")
                     // the runtime classpath carries the removal manifests of
                     // the flavour dependencies (their stripped runtime
                     // artifacts); collecting it per source set lets the

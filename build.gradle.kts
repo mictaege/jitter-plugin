@@ -43,6 +43,7 @@ dependencies {
     implementation("org.ow2.asm:asm:9.10.1")
     implementation("org.ow2.asm:asm-commons:9.10.1")
     implementation("org.ow2.asm:asm-tree:9.10.1")
+    implementation("com.github.javaparser:javaparser-core:3.28.2")
     testImplementation(platform("org.junit:junit-bom:5.12.2"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testImplementation("org.junit.jupiter:junit-jupiter-engine")
