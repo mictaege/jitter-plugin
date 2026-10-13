@@ -1,5 +1,6 @@
 package com.github.mictaege.jitter.plugin
 
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.tasks.JavaExec
@@ -37,6 +38,7 @@ class JitterPlugin implements Plugin<Project>  {
         })
 
         project.afterEvaluate({ ->
+            def roles = sourceSetRoles(project)
             def stripTasks = []
             def allClassesDirs = [] as Set
             def allResourcesDirs = [] as Set
@@ -63,7 +65,7 @@ class JitterPlugin implements Plugin<Project>  {
                     // aggregate verify check the surviving classes against
                     // the removals of the modules this one depends on
                     manifestClasspath = manifestClasspath + srcSet.runtimeClasspath
-                    if (srcSet.name != 'main' && srcSet.name != 'testFixtures') {
+                    if (!roles.packaging.contains(srcSet.name) && !roles.api.contains(srcSet.name)) {
                         // test-like source sets: the stripped model is their
                         // runtime, so the source set output points at the
                         // stripped tree (test tasks and IDEs pick it up from
@@ -71,17 +73,16 @@ class JitterPlugin implements Plugin<Project>  {
                         // switching flavours just re-strips them.
                         srcSet.output.classesDirs = project.files(stripTask)
                     }
-                    // test fixtures compile against the full model
-                    // (testFixturesApiElements keeps the full jar); only
-                    // their runtime artifact is the stripped model, see
-                    // the jitterTestFixturesJar wiring below
+                    // packaging and api source sets keep their full compiled
+                    // classes as the compile identity; only their runtime
+                    // artifact is the stripped model, see the wiring below
                 }
 
                 // the aggregate verify checks the classes that ship or run:
-                // the stripped main and test fixtures trees instead of the
-                // full classes, the classes of every other source set as
-                // they are (test-like: the reassigned stripped output)
-                if ((srcSet.name == 'main' || srcSet.name == 'testFixtures')
+                // the stripped trees of the packaging and api source sets
+                // instead of the full classes, the classes of every other
+                // source set as they are (test-like: the reassigned output)
+                if ((roles.packaging.contains(srcSet.name) || roles.api.contains(srcSet.name))
                         && !project.jitter.excludeSrcSets.contains(srcSet.name)) {
                     def stripTask = project.tasks.findByName("jitterStrip${srcSet.name.capitalize()}")
                     if (stripTask != null && stripTask.outputDir != null) {
@@ -98,20 +99,123 @@ class JitterPlugin implements Plugin<Project>  {
             }
 
             if (!stripTasks.isEmpty()) {
-                def mainStrip = project.tasks.findByName('jitterStripMain')
+                // the packaging source sets with their strip tasks: the ones
+                // whose stripped model is the module's runtime artifact
+                def packagingSets = roles.packaging.collect { name ->
+                    [name: name,
+                     srcSet: project.sourceSets.findByName(name),
+                     strip: project.tasks.findByName("jitterStrip${name.capitalize()}")]
+                }.findAll { it.strip != null && it.strip.outputDir != null }
 
-                // A scoped verify checks only the stripped main tree against
-                // the members removed from main. It lets artifact tasks fail
-                // early on dangling references, without pulling the
-                // compilation of source sets that consume the artifact.
-                def mainVerify = null
-                if (mainStrip != null) {
-                    mainVerify = project.task('jitterVerifyMain', type: JitterVerifyTask)
-                    mainVerify.stripTasks = [mainStrip]
-                    mainVerify.allClassesDirs = [mainStrip.outputDir]
-                    mainVerify.allResourcesDirs = [project.sourceSets.main.output.resourcesDir]
-                    mainVerify.dependencyClasspath = project.sourceSets.main.runtimeClasspath
-                    mainVerify.dependsOn mainStrip
+                // a scoped verify checks only the stripped tree of one
+                // packaging source set against the members removed from it.
+                // It lets artifact tasks fail early on dangling references,
+                // without pulling the compilation of source sets that consume
+                // the artifact.
+                packagingSets.each { p ->
+                    def cap = p.name.capitalize()
+                    def verify = project.task(
+                            p.name == 'main' ? 'jitterVerifyMain' : "jitterVerify${cap}", type: JitterVerifyTask)
+                    verify.stripTasks = [p.strip]
+                    verify.allClassesDirs = [p.strip.outputDir]
+                    verify.allResourcesDirs = [p.srcSet.output.resourcesDir]
+                    verify.dependencyClasspath = p.srcSet.runtimeClasspath
+                    verify.dependsOn p.strip
+
+                    // the stripped runtime artifact: replaces the full jar
+                    // as the outgoing runtime variant, so consumers resolve
+                    // the flavour model at runtime while compiling against
+                    // the full classes
+                    def strippedJar = project.tasks.create(
+                            p.name == 'main' ? 'jitterJar' : "jitter${cap}Jar",
+                            org.gradle.api.tasks.bundling.Jar) {
+                        destinationDirectory = new File(project.buildDir, 'jitter-libs')
+                        from(p.strip.outputDir)
+                        from(p.srcSet.output.resourcesDir)
+                        dependsOn p.strip, project.tasks.named(p.srcSet.processResourcesTaskName)
+                    }
+                    strippedJar.dependsOn verify
+                    def fullJar = project.tasks.findByName(p.name == 'main' ? 'jar' : "${p.name}Jar")
+                    if (fullJar != null) {
+                        strippedJar.archiveFileName.set(fullJar.archiveFileName)
+                    }
+                    def runtimeElements = project.configurations.findByName(
+                            p.name == 'main' ? 'runtimeElements' : "${p.name}RuntimeElements")
+                    if (runtimeElements != null) {
+                        runtimeElements.outgoing.artifacts.removeIf { true }
+                        runtimeElements.outgoing.artifact(strippedJar)
+                    } else if (p.name != 'main') {
+                        JitterUtil.log().warn("jitter: the packaging source set '{}' has no '{}RuntimeElements'"
+                                + " configuration - its stripped runtime artifact is built but no consumer"
+                                + " resolves it", p.name, p.name)
+                    }
+
+                    if (p.name == 'main') {
+                        def warTask = project.tasks.findByName('war')
+                        if (warTask != null) {
+                            warTask.classpath = project.files(p.strip.outputDir, p.srcSet.output.resourcesDir,
+                                    project.configurations.runtimeClasspath)
+                            warTask.dependsOn verify
+                        }
+                    }
+                }
+
+                // the api source sets: the full compiled classes stay the
+                // compile artifact (<name>ApiElements), the stripped jar of
+                // the packaging trees plus their own tree replaces the
+                // outgoing <name>RuntimeElements variant, so that code which
+                // runs against the deployed flavour model sees the same
+                // @Alter/@Fork/@OnlyIf transformations as the application
+                roles.api.each { name ->
+                    def strip = project.tasks.findByName("jitterStrip${name.capitalize()}")
+                    def srcSet = project.sourceSets.findByName(name)
+                    if (strip == null || strip.outputDir == null) {
+                        return
+                    }
+                    def cap = name.capitalize()
+                    def content = packagingSets.collect { it } + [[name: name, srcSet: srcSet, strip: strip]]
+                    def contentStrips = content.collect { it.strip }
+                    def contentSrcSets = content.collect { it.srcSet }
+
+                    // the scoped verify of the api artifact: checks the
+                    // stripped trees of its content against their removals
+                    // and the removals of the flavour dependencies, so the
+                    // artifact task fails early on dangling references
+                    def verify = project.task("jitterVerify${cap}", type: JitterVerifyTask)
+                    verify.stripTasks = contentStrips
+                    verify.allClassesDirs = contentStrips.collect { it.outputDir }
+                    verify.allResourcesDirs = contentSrcSets.collect { it.output.resourcesDir }
+                    verify.dependencyClasspath = contentSrcSets.collect { it.runtimeClasspath }
+                            .inject { a, b -> a + b } ?: project.files()
+                    verify.dependsOn contentStrips
+
+                    def strippedApiJar = project.tasks.create("jitter${cap}Jar",
+                            org.gradle.api.tasks.bundling.Jar) {
+                        destinationDirectory = new File(project.buildDir, 'jitter-libs')
+                        // the trees may carry the same package-info;
+                        // first (packaging) wins, like the old jar
+                        duplicatesStrategy = org.gradle.api.file.DuplicatesStrategy.EXCLUDE
+                        contentStrips.each { s -> from(s.outputDir) }
+                        contentSrcSets.each { s -> from(s.output.resourcesDir) }
+                        dependsOn contentStrips
+                    }
+                    strippedApiJar.dependsOn verify
+                    contentSrcSets.each { s ->
+                        strippedApiJar.dependsOn project.tasks.named(s.processResourcesTaskName)
+                    }
+                    def fullApiJar = project.tasks.findByName("${name}Jar")
+                    if (fullApiJar != null) {
+                        strippedApiJar.archiveFileName.set(fullApiJar.archiveFileName)
+                    }
+                    def apiRuntime = project.configurations.findByName("${name}RuntimeElements")
+                    if (apiRuntime != null) {
+                        apiRuntime.outgoing.artifacts.removeIf { true }
+                        apiRuntime.outgoing.artifact(strippedApiJar)
+                    } else {
+                        JitterUtil.log().warn("jitter: the api source set '{}' has no '{}RuntimeElements'"
+                                + " configuration - its stripped runtime artifact is built but no consumer"
+                                + " resolves it", name, name)
+                    }
                 }
 
                 def verifyTask = project.task("jitterVerify", type: JitterVerifyTask)
@@ -123,95 +227,9 @@ class JitterPlugin implements Plugin<Project>  {
 
                 project.tasks.withType(Test).configureEach { it.dependsOn verifyTask }
                 project.tasks.withType(JavaExec).configureEach { it.dependsOn verifyTask }
-
-                // the stripped runtime artifact of the main source set
-                if (mainStrip != null && mainStrip.outputDir != null) {
-                    def resourcesDir = project.sourceSets.main.output.resourcesDir
-                    def resourcesTask = project.tasks.named(project.sourceSets.main.processResourcesTaskName)
-
-                    def strippedJar = project.tasks.create('jitterJar', org.gradle.api.tasks.bundling.Jar) {
-                        destinationDirectory = new File(project.buildDir, 'jitter-libs')
-                        from(mainStrip.outputDir)
-                        from(resourcesDir)
-                        dependsOn mainStrip, resourcesTask
-                    }
-                    if (mainVerify != null) {
-                        strippedJar.dependsOn mainVerify
-                    }
-                    def fullJar = project.tasks.findByName('jar')
-                    if (fullJar != null) {
-                        strippedJar.archiveFileName.set(fullJar.archiveFileName)
-                    }
-                    // consumers resolve the runtime variant of this project
-                    // against the stripped jar; the full jar stays the
-                    // compile artifact (classes directories) and the test
-                    // fixtures artifact
-                    def runtimeElements = project.configurations.findByName('runtimeElements')
-                    if (runtimeElements != null) {
-                        runtimeElements.outgoing.artifacts.removeIf { true }
-                        runtimeElements.outgoing.artifact(strippedJar)
-                    }
-
-                    def warTask = project.tasks.findByName('war')
-                    if (warTask != null) {
-                        warTask.classpath = project.files(mainStrip.outputDir, resourcesDir,
-                                project.configurations.runtimeClasspath)
-                        warTask.dependsOn mainVerify
-                    }
-                }
-
-                // the stripped runtime artifact of the test fixtures: the
-                // test fixtures compile artifact stays the full jar
-                // (testFixturesApiElements), the runtime variant carries the
-                // stripped test fixtures model, so that test code which
-                // runs against the deployed flavour model sees the same
-                // @Alter/@Fork/@OnlyIf transformations as the application
-                def fixturesStrip = project.tasks.findByName('jitterStripTestFixtures')
-                if (fixturesStrip != null && fixturesStrip.outputDir != null
-                        && mainStrip != null && mainStrip.outputDir != null) {
-                    // the scoped verify of the test fixtures artifact: checks
-                    // the stripped main and test fixtures trees - the content
-                    // of the artifact - against the removals of main and test
-                    // fixtures and of the flavour dependencies, so the
-                    // artifact task fails early on dangling references
-                    def fixturesVerify = project.task('jitterVerifyTestFixtures', type: JitterVerifyTask)
-                    fixturesVerify.stripTasks = [mainStrip, fixturesStrip]
-                    fixturesVerify.allClassesDirs = [mainStrip.outputDir, fixturesStrip.outputDir]
-                    fixturesVerify.allResourcesDirs = [project.sourceSets.main.output.resourcesDir,
-                                                       project.sourceSets.testFixtures.output.resourcesDir]
-                    fixturesVerify.dependencyClasspath = (project.sourceSets.main.runtimeClasspath
-                            + project.sourceSets.testFixtures.runtimeClasspath)
-                    fixturesVerify.dependsOn mainStrip, fixturesStrip
-
-                    def strippedFixturesJar = project.tasks.create('jitterTestFixturesJar',
-                            org.gradle.api.tasks.bundling.Jar) {
-                        destinationDirectory = new File(project.buildDir, 'jitter-libs')
-                        // the main and test fixtures trees may carry the same
-                        // package-info; first (main) wins, like the old jar
-                        duplicatesStrategy = org.gradle.api.file.DuplicatesStrategy.EXCLUDE
-                        from(mainStrip.outputDir)
-                        from(fixturesStrip.outputDir)
-                        from(project.sourceSets.main.output.resourcesDir)
-                        from(project.sourceSets.testFixtures.output.resourcesDir)
-                        dependsOn mainStrip, fixturesStrip
-                    }
-                    strippedFixturesJar.dependsOn fixturesVerify
-                    strippedFixturesJar.dependsOn project.tasks.named(
-                            project.sourceSets.main.processResourcesTaskName)
-                    strippedFixturesJar.dependsOn project.tasks.named(
-                            project.sourceSets.testFixtures.processResourcesTaskName)
-                    def fullFixturesJar = project.tasks.findByName('testFixturesJar')
-                    if (fullFixturesJar != null) {
-                        strippedFixturesJar.archiveFileName.set(fullFixturesJar.archiveFileName)
-                    }
-                    def fixturesRuntime = project.configurations.findByName('testFixturesRuntimeElements')
-                    if (fixturesRuntime != null) {
-                        fixturesRuntime.outgoing.artifacts.removeIf { true }
-                        fixturesRuntime.outgoing.artifact(strippedFixturesJar)
-                    }
-                }
             }
         })
+
 
         project.afterEvaluate({
             project.jitter.flavours.each { fl ->
@@ -250,6 +268,46 @@ class JitterPlugin implements Plugin<Project>  {
         if (selected != null) {
             System.setProperty(FLAVOUR_PROP, selected.substring('flavour'.length()))
         }
+    }
+
+    /**
+     * Resolves the roles of the project's source sets:
+     * {@code packagingSrcSets} - their stripped model is the module's runtime
+     * artifact - and {@code apiSrcSets} - their full classes stay the compile
+     * artifact, the stripped model is the runtime artifact for consumers.
+     * Every source set that carries neither role is test-like: the stripped
+     * model is its runtime identity.
+     *
+     * <p>Names that are no source set of the project are ignored, like
+     * excluded source sets - the defaults name the conventional {@code main}
+     * and {@code testFixtures} sets, which may well not exist in a given
+     * project. A name that is neither a source set nor excluded nor one of
+     * the conventional defaults is reported: most likely a typo in a custom
+     * layout. A source set must not carry both roles.
+     */
+    private static Map sourceSetRoles(final Project project) {
+        def packaging = new HashSet<String>()
+        def api = new HashSet<String>()
+        def conventional = ['main', 'testFixtures'] as Set
+        def resolve = { String name, Set<String> role, String roleProperty ->
+            if (project.sourceSets.findByName(name) == null) {
+                if (!project.jitter.excludeSrcSets.contains(name) && !conventional.contains(name)) {
+                    JitterUtil.log().warn("jitter: {} names the unknown source set '{}', ignored",
+                            roleProperty, name)
+                }
+            } else {
+                role.add(name)
+            }
+        }
+        project.jitter.packagingSrcSets.each { resolve(it, packaging, 'packagingSrcSets') }
+        project.jitter.apiSrcSets.each { resolve(it, api, 'apiSrcSets') }
+        final def overlap = packaging.intersect(api)
+        if (!overlap.isEmpty()) {
+            throw new GradleException(
+                    "jitter: the source sets ${overlap} are both packagingSrcSets and apiSrcSets,"
+                            + " but a source set carries exactly one role")
+        }
+        return [packaging: packaging, api: api]
     }
 
 }

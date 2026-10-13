@@ -147,6 +147,27 @@ jitter {
 
 A complete example of a Gradle build using _jitter_ could be found in the [eval.jitter](https://github.com/mictaege/eval.jitter/blob/master/build.gradle) example.
 
+### Source set roles
+
+Every source set carries one of three roles, which decide how its stripped model is exposed:
+
+| Role | Default source sets | Semantics |
+|------|---------------------|-----------|
+| ```packaging``` | ```main``` | the stripped model is the module's runtime artifact: a stripped ```jitterJar``` replaces the outgoing runtime variant (```runtimeElements``` for ```main```, ```<name>RuntimeElements``` otherwise), the full classes stay the compile artifact |
+| ```api``` | ```testFixtures``` | like the standard test fixtures: the full classes stay the compile artifact (```<name>ApiElements```), a stripped ```jitter<Name>Jar``` replaces the outgoing ```<name>RuntimeElements``` variant for consumers and runtime |
+| test-like | everything else | the stripped tree is the source set's runtime identity - the source set output points at it, so test tasks and IDEs pick it up |
+
+The roles are configurable for projects with a custom source set layout:
+
+```Groovy
+jitter {
+    packagingSrcSets = ['main']
+    apiSrcSets = ['testFixtures', 'sharedFixtures']
+}
+```
+
+A source set must not carry both roles. Names that are no source set of the project are ignored, like excluded source sets - a name that is neither a source set nor excluded nor one of the conventional defaults is most likely a typo and reported as a warning. An ```api``` or non-```main``` ```packaging``` source set without an outgoing ```<name>RuntimeElements``` configuration is reported as well: the stripped runtime artifact is built, but no consumer would resolve it. A custom ```api``` source set follows the same wiring conventions as the standard java-test-fixtures plugin (outgoing ```<name>ApiElements``` and ```<name>RuntimeElements``` variants, selected by the consumers by capability, like ```testFixtures(project(':lib'))``` does for the standard ones).
+
 Once _jitter_ is applied and the flavours of the application are configured the project now has an additional Gradle task for each configured flavour. In the example above these would be the tasks ```flavourCUSTOMER_A```, ```flavourCUSTOMER_B``` and ```flavourCUSTOMER_C```. These additional ```flavourXyz``` tasks are used to select the flavour which should be build or run.
 
 So for example if you like to build the _CUSTOMER_A_ flavour you have to type
@@ -183,7 +204,7 @@ In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Su
 | ```jitterVerifyTestFixtures``` | Scoped verify of the stripped main + test fixtures trees (the content of the ```jitterTestFixturesJar``` artifact) |
 | ```jitterVerify``` | Aggregate verify: checks everything that ships or runs; every ```Test``` and ```JavaExec``` task depends on it |
 | ```jitterJar``` | The stripped runtime artifact of the main source set (classes + resources), replaces the plain jar in the runtime variant |
-| ```jitterTestFixturesJar``` | The stripped runtime artifact of the main and test fixtures source sets |
+| ```jitterTestFixturesJar``` | The stripped runtime artifact of the main and test fixtures source sets (generalized as ```jitter<Name>Jar``` for custom ```api``` source sets) |
 | ```reportCriticalTerms``` / ```verifyCriticalTerms``` | Critical term verification, see below |
 
 ### Verification of dangling references

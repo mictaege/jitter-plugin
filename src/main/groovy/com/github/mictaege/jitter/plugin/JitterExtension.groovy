@@ -12,6 +12,26 @@ class JitterExtension {
     /** List of excluded source sets. */
     List<String> excludeSrcSets = new ArrayList<>()
 
+    /**
+     * Source sets whose flavour-stripped model is the module's runtime
+     * artifact: a stripped jar replaces the outgoing runtime variant
+     * ({@code runtimeElements} for {@code main},
+     * {@code <name>RuntimeElements} for any other name). Their full
+     * compiled classes stay the compile artifact, so downstream modules
+     * compile against the 150% model. The default is the {@code main}
+     * source set.
+     */
+    List<String> packagingSrcSets = new ArrayList<>(List.of('main'))
+
+    /**
+     * Source sets that keep their full compiled classes as the compile
+     * artifact and get a flavour-stripped runtime artifact instead: a
+     * stripped jar replaces the outgoing {@code <name>RuntimeElements}
+     * variant, like the standard test fixtures do. The default is the
+     * {@code testFixtures} source set.
+     */
+    List<String> apiSrcSets = new ArrayList<>(List.of('testFixtures'))
+
     void flavour(Closure closure) {
         def instance = new FlavourCfg()
         flavours.add(instance)
