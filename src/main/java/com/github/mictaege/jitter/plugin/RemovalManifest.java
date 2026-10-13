@@ -48,6 +48,18 @@ final class RemovalManifest {
     }
 
     /**
+     * Reads the given manifest file directly into the given removal sets -
+     * the manifest of a strip task's output directory.
+     */
+    static void readFile(final File manifest, final Set<String> removedClasses,
+                         final Set<String> removedMembers) throws IOException {
+        if (manifest == null || !manifest.isFile()) {
+            return;
+        }
+        parse(manifest.toPath(), removedClasses, removedMembers);
+    }
+
+    /**
      * Reads all manifests found in the given classpath entry - a directory
      * (classes tree) or a jar - into the given removal sets.
      */

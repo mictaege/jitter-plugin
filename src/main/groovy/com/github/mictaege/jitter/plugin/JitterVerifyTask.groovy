@@ -45,8 +45,26 @@ class JitterVerifyTask extends DefaultTask {
         def errors = []
 
         stripTasks.each { task ->
-            task.stripResult.removedClasses.each { removedClasses << it }
-            task.stripResult.removedMembers.each { removedMembers << it }
+            if (task.outputDir != null && task.manifestName != null) {
+                // the removals are read from the strip task's MANIFEST, not
+                // its in-memory result: a strip task loaded from the build
+                // cache never executes, so its result object stays empty -
+                // the manifest is part of the cached output and always there
+                try {
+                    RemovalManifest.readFile(
+                            new File(task.outputDir,
+                                    RemovalManifest.DIR + task.manifestName + RemovalManifest.SUFFIX),
+                            removedClasses, removedMembers)
+                } catch (IOException e) {
+                    throw new GradleException(
+                            "Could not read the removal manifest of the stripped ${task.manifestName} model", e)
+                }
+            } else {
+                // in-place stripping has no manifest - the result of the
+                // executed task is the only source
+                task.stripResult.removedClasses.each { removedClasses << it }
+                task.stripResult.removedMembers.each { removedMembers << it }
+            }
             task.stripResult.errors.each { errors << it }
         }
 

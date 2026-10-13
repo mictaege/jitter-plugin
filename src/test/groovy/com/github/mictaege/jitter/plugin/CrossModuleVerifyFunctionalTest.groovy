@@ -177,6 +177,33 @@ class CrossModuleVerifyFunctionalTest {
     }
 
     @Test
+    void shouldVerifyOwnRemovalsEvenWhenTheStripComesFromTheBuildCache() {
+        write('app/src/main/java/app/App.java', """
+            package app;
+
+            import lib.Greeter;
+
+            public class App {
+
+                public String welcome() {
+                    return new Greeter().greetB();
+                }
+            }
+        """)
+
+        // the first build populates the build cache with the strip result;
+        // the dangling reference is caught while the strip still executes
+        runAndFail('--build-cache', 'flavourA', ':app:jitterVerifyMain')
+
+        // the second build loads the strip task FROM-CACHE: its in-memory
+        // result stays empty, the verification must read the removal
+        // manifest from the cached output instead
+        def result = runAndFail('--build-cache', 'flavourA', 'clean', ':app:jitterVerifyMain')
+
+        assertThat(result.getOutput(), containsString('app.App calls removed method lib.Greeter#greetB'))
+    }
+
+    @Test
     void shouldPassTheScopedTestFixturesVerifyWhenTheProducerCodeSurvives() {
         def result = run('flavourB', ':app:jitterTestFixturesJar')
 
