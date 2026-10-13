@@ -82,8 +82,8 @@ The 150% model is compiled completely and untouched by the normal compiler - the
 
 - Every source set gets a `jitterStrip<SrcSet>` task that runs after the compilation of its own source set and writes the stripped model to `build/jitter-stripped/<srcSet>` (the compiled classes stay untouched).
 - Compilation resolves against the full 150% model: other modules and downstream source sets compile against the compiled classes directories / the full jar (the compile artifacts), so every compile sees the complete model in every flavour.
-- Everything that ships or runs is stripped: `jitterJar` packages the stripped classes of the main source set together with the processed resources and replaces the plain jar as the runtime artifact (`runtimeElements`) - wars, test runtime and every other runtime consumer get the flavour variant. For the `war` task the classpath is wired to the stripped model as well. Test-like source sets are stripped too, with their output pointing at the stripped tree, so tests run against the same model that is deployed. Test fixtures keep the full jar as compile artifact and get a stripped `jitterTestFixturesJar` as runtime artifact.
-- `jitterVerifyMain` / `jitterVerify` check the stripped model for dangling references (see below).
+- Everything that ships or runs is stripped: the runtime artifacts (like `jitterJar`, which replaces the plain jar as the `runtimeElements` artifact) carry the flavour model - wars, test runtime and every other runtime consumer get the flavour variant. For the `war` task the classpath is wired to the stripped model as well. Which source sets expose their stripped model how is decided by the source set roles (see below): test-like source sets run against their stripped tree, packaging and api source sets get stripped runtime artifacts for their consumers.
+- The verify tasks check the stripped model for dangling references (see below).
 
 Because the stripping works on the class files, the source files and the line number tables of the surviving code are not touched at all - the debugger resolves to the original sources.
 
@@ -145,7 +145,7 @@ jitter {
 }
 ```
 
-A complete example of a Gradle build using _jitter_ could be found in the [eval.jitter](https://github.com/mictaege/eval.jitter/blob/master/build.gradle) example.
+A complete example of a Gradle build using _jitter_ could be found in the [eval.jitter](https://github.com/mictaege/eval.jitter) example - including a library with a custom api source set and consumers of its stripped artifacts.
 
 ### Source set roles
 
@@ -193,6 +193,20 @@ systemProp.jitter.active.flavour=CUSTOMER_A
 ```
 
 In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Such a permanently selected flavour in the _gradle.properties_ file will be overwritten by an explicit ```flavourXyz``` selection, so ```gradle flavourCUSTOMER_B clean build``` will build flavour _CUSTOMER_B_ even if flavour _CUSTOMER_A_ is defined in the _gradle.properties_ file.
+
+### The active flavour in forked JVMs
+
+Code that needs to know the active flavour at runtime reads the system property ```jitter.active.flavour``` (empty or absent means no flavour - the 150% model). With a ```systemProp.jitter.active.flavour``` entry in the _gradle.properties_ file, every forked JVM sees it. With a ```flavourXyz``` task selection it is not so simple: the property is set in the build JVM, but **forked test JVMs do not reliably inherit the build JVM's system properties** - reading it eagerly at configuration time can capture a stale value from a previous build in the same daemon. Pass it explicitly at execution time:
+
+```Groovy
+test {
+    doFirst {
+        systemProperty 'jitter.active.flavour', System.getProperty('jitter.active.flavour', '')
+    }
+}
+```
+
+The [eval.jitter](https://github.com/mictaege/eval.jitter) example shows the pattern in use.
 
 ### Task overview
 
