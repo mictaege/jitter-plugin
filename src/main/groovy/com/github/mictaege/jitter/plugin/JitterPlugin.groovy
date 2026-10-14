@@ -80,6 +80,13 @@ class JitterPlugin implements Plugin<Project>  {
                             "jitter-stripped/${srcSet.name}/META-INF/jitter/${srcSet.name}-removed.txt")
                     dejitterTask.dependsOn stripTask, project.tasks.named(srcSet.processResourcesTaskName)
                     dejitterTask.outputDir = new File(project.buildDir, "${JitterUtil.DEJITTERED_DIR}/${srcSet.name}")
+                    // the Kotlin PSI of the source level dejittering resolves
+                    // lazily from the repositories of the applying build and
+                    // loads in an isolated classloader - it is deliberately no
+                    // runtime dependency of the plugin, it would clash with the
+                    // Kotlin toolchain of Kotlin based builds
+                    dejitterTask.kotlinCompilerJars = project.configurations.detachedConfiguration(
+                            project.dependencies.create(JitterUtil.KOTLIN_COMPILER_EMBEDDABLE))
                     // the runtime classpath carries the removal manifests of
                     // the flavour dependencies (their stripped runtime
                     // artifacts); collecting it per source set lets the

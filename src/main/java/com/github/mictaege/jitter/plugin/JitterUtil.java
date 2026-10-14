@@ -11,6 +11,13 @@ final class JitterUtil {
     static final String FLAVOUR_PROP = "jitter.active.flavour";
     static final String GROUP = "jitter";
     static final String DEJITTERED_DIR = "jitter-dejittered";
+    /**
+     * The Kotlin PSI for the dejittering of Kotlin sources, resolved lazily
+     * at dejitter time and loaded in an isolated classloader. The version
+     * should match the Kotlin version of the consumers.
+     */
+    public static final String KOTLIN_COMPILER_EMBEDDABLE =
+            "org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21";
     private static final Logger logger = Logging.getLogger("jitter");
 
     private JitterUtil() {

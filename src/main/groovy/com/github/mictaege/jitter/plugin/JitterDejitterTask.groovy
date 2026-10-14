@@ -66,6 +66,16 @@ class JitterDejitterTask extends DefaultTask {
     Map<File, List<File>> externalTemplateDirs = [:]
 
     /**
+     * The kotlin compiler embeddable of the Kotlin source dejittering,
+     * resolved lazily: it is no runtime dependency of the plugin (it would
+     * clash with the Kotlin toolchain of Kotlin based builds), so the jars
+     * load in an isolated classloader only when a Kotlin source is actually
+     * dejittered.
+     */
+    @Internal
+    FileCollection kotlinCompilerJars
+
+    /**
      * The removal manifest of the stripped model, the cross check reference.
      * A source set without classes gets no stripped model and no manifest,
      * so the input is null then and the cross check is skipped - that is why
@@ -104,14 +114,20 @@ class JitterDejitterTask extends DefaultTask {
         def dejitterer = new Dejitterer(activeFlavour,
                 compileClasspath == null ? [] : compileClasspath.files as List,
                 templateDirs)
+        dejitterer.kotlinCompilerJars = kotlinCompilerJars == null ? [] : kotlinCompilerJars.files as List
         outputDir.deleteDir()
         // the variant mirrors the source set layout: the dejittered sources
         // under java, the flavour processed resources under resources
         def sourcesDir = new File(outputDir, 'java')
         sourcesDir.mkdirs()
-        def result = dejitterer.dejitter(
-                sourceDirs.findAll { it.exists() }*.toPath() as Set,
-                sourcesDir.toPath())
+        def result
+        try {
+            result = dejitterer.dejitter(
+                    sourceDirs.findAll { it.exists() }*.toPath() as Set,
+                    sourcesDir.toPath())
+        } finally {
+            dejitterer.close()
+        }
         result.infos.each { logger.lifecycle(it) }
         if (!result.errors.isEmpty()) {
             throw new GradleException("jitter dejittering failed:\n  " + result.errors.join("\n  "))
@@ -157,6 +173,11 @@ class JitterDejitterTask extends DefaultTask {
      * the manifest may know more (generated classes, package-infos), but
      * never less. A source removal the stripper did not make means the
      * source surgery and the bytecode stripping disagree.
+     *
+     * And the other direction must hold as well: a kept source file of a
+     * class the bytecode stripping removed leaks flavour specific code
+     * into the source delivery - like the Kotlin files of a package that
+     * only its Java package-info gates.
      */
     private void crossCheckManifest(final result) {
         if (manifestFile == null || !manifestFile.isFile()) {
@@ -171,6 +192,13 @@ class JitterDejitterTask extends DefaultTask {
             throw new GradleException(
                     "jitter: the dejittered model removes classes that are not removed from"
                     + " the stripped model: " + unexpected.collect { it.replace('/', '.') }
+                    + " - the source level dejittering and the bytecode stripping disagree")
+        }
+        def keptThoughRemoved = result.keptSourceClasses.findAll { removedInBytecode.contains(it) }
+        if (!keptThoughRemoved.isEmpty()) {
+            throw new GradleException(
+                    "jitter: the dejittered model keeps source files of classes that are removed"
+                    + " from the stripped model: " + keptThoughRemoved.collect { it.replace('/', '.') }
                     + " - the source level dejittering and the bytecode stripping disagree")
         }
         logger.lifecycle("jitter: dejittered model cross checked against the removal manifest")

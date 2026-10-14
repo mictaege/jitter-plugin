@@ -31,9 +31,6 @@ import com.github.javaparser.ast.nodeTypes.NodeWithJavadoc;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -77,7 +74,7 @@ import java.util.stream.Stream;
  * removal must also have been removed from the bytecode, otherwise the
  * source surgery applied something the bytecode stripping did not.
  */
-public final class Dejitterer {
+public final class Dejitterer implements AutoCloseable {
 
     private static final List<String> JITTER_ANNOS = List.of(
             "OnlyIf", "Fork", "Gateway", "Alter", "Alternatives");
@@ -96,7 +93,9 @@ public final class Dejitterer {
     private final StripResult result = new StripResult();
     private final Set<Path> removedPackageDirs = new HashSet<>();
     private final Set<Path> deletedFiles = new LinkedHashSet<>();
-    private URLClassLoader constantLoader;
+    private ClasspathConstants constants;
+    private KotlinDejitter kotlin;
+    private List<File> kotlinCompilerJars = List.of();
 
     public Dejitterer(final String activeFlavour, final List<File> compileClasspath) {
         this(activeFlavour, compileClasspath, Map.of());
@@ -115,6 +114,26 @@ public final class Dejitterer {
         this.activeFlavour = activeFlavour == null ? "" : activeFlavour;
         this.compileClasspath = compileClasspath == null ? List.of() : compileClasspath;
         this.externalTemplateDirs = externalTemplateDirs == null ? Map.of() : externalTemplateDirs;
+        this.constants = new ClasspathConstants(compileClasspath);
+    }
+
+    /**
+     * @param kotlinCompilerJars the resolved files of the kotlin compiler
+     *        embeddable, including its dependencies: the Kotlin PSI is loaded
+     *        in an isolated classloader so that it can never clash with a
+     *        Kotlin toolchain of the applying build. Without jars the
+     *        Kotlin PSI must already be on the classpath, like in the tests.
+     */
+    public void setKotlinCompilerJars(final List<File> kotlinCompilerJars) {
+        this.kotlinCompilerJars = kotlinCompilerJars == null ? List.of() : kotlinCompilerJars;
+    }
+
+    @Override
+    public void close() {
+        if (kotlin != null) {
+            kotlin.close();
+        }
+        constants.close();
     }
 
     /**
@@ -124,6 +143,7 @@ public final class Dejitterer {
      */
     public StripResult dejitter(final Set<Path> sourceDirs, final Path outputDir) throws IOException {
         final List<Path> javaFiles = new ArrayList<>();
+        final List<Path> kotlinFiles = new ArrayList<>();
         final List<Path> otherFiles = new ArrayList<>();
         for (final Path dir : sourceDirs) {
             if (!Files.isDirectory(dir)) {
@@ -131,8 +151,11 @@ public final class Dejitterer {
             }
             try (Stream<Path> walk = Files.walk(dir)) {
                 walk.filter(Files::isRegularFile).sorted().forEach(f -> {
-                    if (f.toString().endsWith(".java")) {
+                    final String name = f.getFileName().toString();
+                    if (name.endsWith(".java")) {
                         javaFiles.add(f);
+                    } else if (name.endsWith(".kt")) {
+                        kotlinFiles.add(f);
                     } else {
                         otherFiles.add(f);
                     }
@@ -140,8 +163,10 @@ public final class Dejitterer {
             }
         }
 
-        // flavour removed packages first: their classes must not be
-        // processed no matter in which order the files are visited
+        // flavour removed packages first: their files must not be processed
+        // no matter in which order the files are visited - the package gate
+        // covers every language of the package, the Kotlin files of a
+        // flavour specific package carry no annotations of their own
         collectRemovedPackages(javaFiles);
 
         for (final Path file : javaFiles) {
@@ -158,13 +183,69 @@ public final class Dejitterer {
             processFile(file, sourceDirs, outputDir, javaFiles);
         }
 
+        // created lazily so that builds without Kotlin sources pay nothing
+        KotlinDejitter kotlinDejitterer = null;
+        try {
+            for (final Path file : kotlinFiles) {
+                if (deletedFiles.contains(file)) {
+                    continue;
+                }
+                if (isRemovedPackageDir(file.getParent())) {
+                    if (kotlinDejitterer == null) {
+                        kotlinDejitterer = kotlin(sourceDirs, outputDir);
+                    }
+                    kotlinDejitterer.recordPackageRemoval(file, result);
+                    deletedFiles.add(file);
+                    result.info("Remove file " + file.getFileName()
+                            + " of flavour removed package " + file.getParent().getFileName());
+                    continue;
+                }
+                if (kotlinDejitterer == null) {
+                    kotlinDejitterer = kotlin(sourceDirs, outputDir);
+                }
+                kotlinDejitterer.dejitter(file, result, deletedFiles);
+            }
+        } finally {
+            if (kotlinDejitterer != null) {
+                kotlinDejitterer.close();
+            }
+        }
+
         for (final Path file : otherFiles) {
-            if (deletedFiles.contains(file)) {
+            if (deletedFiles.contains(file) || isRemovedPackageDir(file.getParent())) {
                 continue;
             }
             copy(file, sourceDirs, outputDir);
         }
+
+        // the kept source files of the variant for the symmetric manifest
+        // cross check: a class the bytecode stripping removed must not have
+        // a kept source file. The Kotlin dejittering records its kept
+        // classes itself, from the declarations and not the file names
+        recordKeptSourceClasses(javaFiles, sourceDirs);
         return result;
+    }
+
+    private KotlinDejitter kotlin(final Set<Path> sourceDirs, final Path outputDir) throws IOException {
+        if (kotlin == null) {
+            kotlin = kotlinCompilerJars.isEmpty()
+                    ? new KotlinDejitterer(activeFlavour, sourceDirs, outputDir,
+                            compileClasspath, externalTemplateDirs)
+                    : new IsolatedKotlinDejitter(activeFlavour, sourceDirs, outputDir,
+                            compileClasspath, externalTemplateDirs, kotlinCompilerJars);
+        }
+        return kotlin;
+    }
+
+    private void recordKeptSourceClasses(final List<Path> files, final Set<Path> sourceDirs)
+            throws IOException {
+        for (final Path file : files) {
+            if (deletedFiles.contains(file) || isRemovedPackageDir(file.getParent())) {
+                continue;
+            }
+            final String relative = relative(file, sourceDirs).toString().replace('\\', '/');
+            result.keptSourceClass(relative.substring(0, relative.lastIndexOf('.')));
+        }
     }
 
     // ---------------------------------------------------------------- packages
@@ -622,15 +703,17 @@ public final class Dejitterer {
     }
 
     private String resolveConstant(final CompilationUnit cu, final String scope, final String field) {
-        for (final String candidate : classCandidates(cu, scope)) {
-            final String value = reflectConstant(candidate, field);
-            if (value != null) {
-                return value;
-            }
+        final String pkg = cu.getPackageDeclaration()
+                .map(p -> p.getNameAsString()).orElse("");
+        return constants.resolve(scope, field, importsOf(cu), pkg);
+    }
+
+    private List<String> importsOf(final CompilationUnit cu) {
+        final List<String> out = new ArrayList<>();
+        for (final ImportDeclaration imp : cu.getImports()) {
+            out.add(imp.getNameAsString());
         }
-        // no reflection possible: the plain field name is the best guess,
-        // the manifest cross check will report if it guessed wrong
-        return field;
+        return out;
     }
 
     /**
@@ -758,63 +841,6 @@ public final class Dejitterer {
             this.text = text;
             this.file = file;
         }
-    }
-
-    private List<String> classCandidates(final CompilationUnit cu, final String scope) {
-        final List<String> candidates = new ArrayList<>();
-        if (scope.isEmpty()) {
-            return candidates;
-        }
-        if (scope.indexOf('.') >= 0) {
-            candidates.add(scope);
-            candidates.add(scope.substring(0, scope.lastIndexOf('.'))
-                    + "$" + scope.substring(scope.lastIndexOf('.') + 1));
-        } else {
-            for (final ImportDeclaration imp : cu.getImports()) {
-                final String name = imp.getNameAsString();
-                if (imp.isAsterisk()) {
-                    if (!imp.isStatic()) {
-                        candidates.add(name.substring(0, name.length() - 1) + scope);
-                    }
-                } else if (name.endsWith("." + scope)) {
-                    candidates.add(name);
-                }
-            }
-            final String pkg = cu.getPackageDeclaration()
-                    .map(p -> p.getNameAsString() + ".").orElse("");
-            candidates.add(pkg + scope);
-        }
-        return candidates;
-    }
-
-    private String reflectConstant(final String className, final String fieldName) {
-        try {
-            final Class<?> type = Class.forName(className, false, constantLoader());
-            final Field field = type.getDeclaredField(fieldName);
-            if (field.getType() == String.class
-                    && (field.getModifiers() & java.lang.reflect.Modifier.STATIC) != 0) {
-                return (String) field.get(null);
-            }
-        } catch (final ReflectiveOperationException | LinkageError ignored) {
-            // not found on the classpath - the next candidate is tried
-        }
-        return null;
-    }
-
-    private synchronized URLClassLoader constantLoader() {
-        if (constantLoader == null) {
-            final List<URL> urls = new ArrayList<>();
-            for (final File file : compileClasspath) {
-                try {
-                    urls.add(file.toURI().toURL());
-                } catch (final java.net.MalformedURLException ignored) {
-                    // a classpath entry that is no URL is skipped
-                }
-            }
-            constantLoader = new URLClassLoader(urls.toArray(new URL[0]),
-                    getClass().getClassLoader());
-        }
-        return constantLoader;
     }
 
     private List<String> evalFlavours(final CompilationUnit cu, final Expression expr) {

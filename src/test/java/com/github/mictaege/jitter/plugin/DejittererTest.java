@@ -128,6 +128,37 @@ public class DejittererTest {
         assertThat(result.getRemovedClasses(), is(Set.of("com/example/nasa/NasaTool")));
     }
 
+    /**
+     * The package gate lives in the Java package-info and covers every
+     * language of the package: the Kotlin files of the package carry no
+     * annotations of their own and must leave the variant together with the
+     * Java files. Their classes are recorded like the bytecode removals of
+     * the whole package, and no kept source may remain for them.
+     */
+    @Test
+    void removesKotlinFilesOfAnInactivePackageInfo() throws Exception {
+        write("com/example/nasa/package-info.java",
+                "@com.github.mictaege.jitter.api.OnlyIf(\"Nasa\")\n"
+                + "package com.example.nasa;\n");
+        write("com/example/nasa/NasaTool.java",
+                "package com.example.nasa;\n"
+                + "public class NasaTool { }\n");
+        write("com/example/nasa/NasaTool.kt",
+                "package com.example.nasa\n"
+                + "\n"
+                + "class NasaHelper\n");
+        write("com/example/plain/PlainTool.java",
+                "package com.example.plain;\n"
+                + "public class PlainTool { }\n");
+
+        final StripResult result = dejitter("Esa");
+
+        assertThat(Files.exists(out.resolve("com/example/nasa/NasaTool.kt")), is(false));
+        assertThat(result.getRemovedClasses(),
+                is(Set.of("com/example/nasa/NasaTool", "com/example/nasa/NasaHelper")));
+        assertThat(result.getKeptSourceClasses(), is(Set.of("com/example/plain/PlainTool")));
+    }
+
     @Test
     void removesInactiveEnumConstants() throws Exception {
         write("com/example/Variant.java",

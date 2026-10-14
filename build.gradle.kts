@@ -44,12 +44,18 @@ dependencies {
     implementation("org.ow2.asm:asm-commons:9.10.1")
     implementation("org.ow2.asm:asm-tree:9.10.1")
     implementation("com.github.javaparser:javaparser-core:3.28.2")
+    // the Kotlin PSI for dejittering Kotlin sources; compile only: the jar
+    // is resolved lazily at dejitter time and loaded in an isolated
+    // classloader, a runtime dependency would pollute the classpath of
+    // Kotlin based builds (their Gradle plugin clashes with it)
+    compileOnly("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
     testImplementation(platform("org.junit:junit-bom:5.12.2"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testImplementation("org.junit.jupiter:junit-jupiter-engine")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.12.2")
     testImplementation("org.hamcrest:hamcrest:3.0")
     testImplementation("org.mockito:mockito-core:5.17.0")
+    testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
 }
 
 tasks.register("generateResources") {

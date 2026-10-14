@@ -15,6 +15,7 @@ import java.util.TreeSet;
 public final class StripResult {
 
     private final TreeSet<String> removedClasses = new TreeSet<>();
+    private final TreeSet<String> keptSourceClasses = new TreeSet<>();
     private final TreeSet<String> removedMembers = new TreeSet<>();
     private final List<String> removedFields = new ArrayList<>();
     private final List<String> errors = new ArrayList<>();
@@ -71,6 +72,28 @@ public final class StripResult {
 
     public TreeSet<String> getRemovedClasses() {
         return removedClasses;
+    }
+
+    /**
+     * The internal names of the classes whose source files stay in the
+     * dejittered variant, derived from the file names. The cross check of
+     * the task compares them with the removal manifest: a class the
+     * bytecode stripping removed must not have a kept source file.
+     */
+    public void keptSourceClass(final String internalName) {
+        keptSourceClasses.add(internalName);
+    }
+
+    /**
+     * Takes back a kept class record: the source was consumed as a template,
+     * like an {@code @Alter} template that was dejittered before its target.
+     */
+    public void unkeepSourceClass(final String internalName) {
+        keptSourceClasses.remove(internalName);
+    }
+
+    public TreeSet<String> getKeptSourceClasses() {
+        return keptSourceClasses;
     }
 
     public TreeSet<String> getRemovedMembers() {
