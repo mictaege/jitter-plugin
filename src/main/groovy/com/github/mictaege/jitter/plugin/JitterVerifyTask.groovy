@@ -114,7 +114,8 @@ class JitterVerifyTask extends DefaultTask {
                 if (file.isFile()) {
                     def relative = dir.toPath().relativize(file.toPath()).toString()
                             .replace(File.separator, '/')
-                    def withoutExt = relative.substring(0, relative.lastIndexOf('.'))
+                    def dot = relative.lastIndexOf('.')
+                    def withoutExt = dot < 0 ? relative : relative.substring(0, dot)
                     if (removedClasses.contains(withoutExt)) {
                         logger.warn("jitter: resource {} ships without its owner class {} (removed by the active flavour)",
                                 relative, withoutExt.replace('/', '.') + ".class")
