@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -340,6 +341,46 @@ public class DejittererTest {
         assertThat(text, containsString("public final class Variant"));
         assertThat(text, containsString("Variant.class.getSimpleName()"));
         assertThat(text, not(containsString("EsaVariant")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
+    void altersWithATemplateOfAnotherSourceSet() throws Exception {
+        write("com/example/TableNames.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.Alter;\n"
+                + "@Alter(ifActive = \"Esa\", with = \"com.example.ext.EsaTableNames\")\n"
+                + "public interface TableNames {\n"
+                + "  String JOB = \"none\";\n"
+                + "}\n");
+        final Path extSrc = workDir.resolve("ext-src");
+        final Path extClasses = workDir.resolve("ext-classes");
+        final Path templateFile = extSrc.resolve("com/example/ext/EsaTableNames.java");
+        Files.createDirectories(templateFile.getParent());
+        Files.writeString(templateFile,
+                "package com.example.ext;\n"
+                + "public class EsaTableNames {\n"
+                + "  public static final String JOB = \"esa\";\n"
+                + "  public static String of(String key) { return EsaTableNames.JOB + key; }\n"
+                + "}\n", StandardCharsets.UTF_8);
+        Files.createDirectories(extClasses.resolve("com/example/ext"));
+        Files.write(extClasses.resolve("com/example/ext/EsaTableNames.class"),
+                new byte[]{1});
+
+        final StripResult result = new Dejitterer("Esa", List.of(),
+                Map.of(extClasses.toFile(), List.of(extSrc.toFile())))
+                .dejitter(Set.of(src), out);
+
+        assertThat(Files.exists(out.resolve("com/example/TableNames.java")), is(true));
+        final String text = read("com/example/TableNames.java");
+        assertThat(text, containsString("package com.example;"));
+        assertThat(text, containsString("public class TableNames"));
+        assertThat(text, containsString("\"esa\""));
+        assertThat(text, containsString("TableNames.JOB"));
+        assertThat(text, not(containsString("Alter")));
+        // the template stays in its own source set - like the bytecode
+        // stripping, which keeps classpath templates where they are
+        assertThat(Files.exists(templateFile), is(true));
         assertThat(result.getErrors().isEmpty(), is(true));
     }
 

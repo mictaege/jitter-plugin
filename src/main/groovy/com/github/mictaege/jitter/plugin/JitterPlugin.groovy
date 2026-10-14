@@ -271,6 +271,12 @@ class JitterPlugin implements Plugin<Project>  {
                     }
                 }
             }
+            // the scan covers the stripped trees of the project, so the
+            // stripping must run first: without the dependency the scan
+            // would report the stripped trees of a previous flavour run
+            project.tasks.withType(AbstractCriticalTermsTask).configureEach {
+                it.dependsOn project.tasks.withType(JitterStripTask)
+            }
             project.task("reportCriticalTerms", type:ReportCriticalTermsTask)
             project.task("verifyCriticalTerms", type:VerifyCriticalTermsTask)
         })

@@ -56,6 +56,16 @@ class JitterDejitterTask extends DefaultTask {
     FileCollection compileClasspath
 
     /**
+     * Additional lookup entries for {@code @Alter} templates of other source
+     * sets: classes output directory mapped to source directories. Merged
+     * over the build wide index the task derives from the java projects of
+     * the build at execution time, so special setups can add or override
+     * entries.
+     */
+    @Internal
+    Map<File, List<File>> externalTemplateDirs = [:]
+
+    /**
      * The removal manifest of the stripped model, the cross check reference.
      * A source set without classes gets no stripped model and no manifest,
      * so the input is null then and the cross check is skipped - that is why
@@ -89,8 +99,11 @@ class JitterDejitterTask extends DefaultTask {
 
     @TaskAction
     void run() {
+        def templateDirs = buildTemplateDirsIndex()
+        templateDirs.putAll(externalTemplateDirs)
         def dejitterer = new Dejitterer(activeFlavour,
-                compileClasspath == null ? [] : compileClasspath.files as List)
+                compileClasspath == null ? [] : compileClasspath.files as List,
+                templateDirs)
         outputDir.deleteDir()
         // the variant mirrors the source set layout: the dejittered sources
         // under java, the flavour processed resources under resources
@@ -105,6 +118,28 @@ class JitterDejitterTask extends DefaultTask {
         }
         copyResources()
         crossCheckManifest(result)
+    }
+
+    /**
+     * The classes output directories of all java source sets of the build,
+     * mapped to their source directories: the lookup for {@code @Alter}
+     * templates of other source sets, mirroring the bytecode stripping which
+     * resolves classpath templates. Derived at execution time so that every
+     * project of the build is evaluated - at configuration time the later
+     * evaluated projects of a multi project build would not be visible yet.
+     */
+    private Map<File, List<File>> buildTemplateDirsIndex() {
+        def index = [:]
+        project.rootProject.allprojects { p ->
+            p.plugins.withId('java') {
+                p.sourceSets.all { ss ->
+                    ss.output.classesDirs.files.each { dir ->
+                        index[dir] = ss.java.srcDirs.toList()
+                    }
+                }
+            }
+        }
+        index
     }
 
     private void copyResources() {

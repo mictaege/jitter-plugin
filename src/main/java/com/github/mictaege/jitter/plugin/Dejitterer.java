@@ -92,14 +92,29 @@ public final class Dejitterer {
 
     private final String activeFlavour;
     private final List<File> compileClasspath;
+    private final Map<File, List<File>> externalTemplateDirs;
     private final StripResult result = new StripResult();
     private final Set<Path> removedPackageDirs = new HashSet<>();
     private final Set<Path> deletedFiles = new LinkedHashSet<>();
     private URLClassLoader constantLoader;
 
     public Dejitterer(final String activeFlavour, final List<File> compileClasspath) {
+        this(activeFlavour, compileClasspath, Map.of());
+    }
+
+    /**
+     * @param externalTemplateDirs the classes output directories of all source
+     *        sets of the build, mapped to their source directories: the lookup
+     *        for {@code @Alter} templates of other source sets, mirroring the
+     *        bytecode stripping which resolves them from the classpath. A
+     *        template of another source set stays where it is - only the
+     *        target takes over its content.
+     */
+    public Dejitterer(final String activeFlavour, final List<File> compileClasspath,
+                      final Map<File, List<File>> externalTemplateDirs) {
         this.activeFlavour = activeFlavour == null ? "" : activeFlavour;
         this.compileClasspath = compileClasspath == null ? List.of() : compileClasspath;
+        this.externalTemplateDirs = externalTemplateDirs == null ? Map.of() : externalTemplateDirs;
     }
 
     /**
@@ -643,24 +658,48 @@ public final class Dejitterer {
         }
         final String templateName = with.substring(with.lastIndexOf('.') + 1);
         final Path packageDir = templatePackageDir(with, targetFile, sourceDirs);
-        if (packageDir == null) {
-            return null;
-        }
-        try (Stream<Path> files = Files.list(packageDir)) {
-            for (final Path candidate : files.sorted().collect(Collectors.toList())) {
-                if (!candidate.toString().endsWith(".java")) {
-                    continue;
-                }
-                final String text = read(candidate);
-                final ParseResult<CompilationUnit> parsed = parser.parse(text);
-                if (!parsed.isSuccessful() || parsed.getResult().isEmpty()) {
-                    continue;
-                }
-                for (final TypeDeclaration<?> type : parsed.getResult().get().getTypes()) {
-                    if (type.getNameAsString().equals(templateName)) {
-                        return new TemplateSource(typeSource(parsed.getResult().get(), text, type),
-                                null);
+        if (packageDir != null) {
+            try (Stream<Path> files = Files.list(packageDir)) {
+                for (final Path candidate : files.sorted().collect(Collectors.toList())) {
+                    if (!candidate.toString().endsWith(".java")) {
+                        continue;
                     }
+                    final String text = read(candidate);
+                    final ParseResult<CompilationUnit> parsed = parser.parse(text);
+                    if (!parsed.isSuccessful() || parsed.getResult().isEmpty()) {
+                        continue;
+                    }
+                    for (final TypeDeclaration<?> type : parsed.getResult().get().getTypes()) {
+                        if (type.getNameAsString().equals(templateName)) {
+                            return new TemplateSource(
+                                    typeSource(parsed.getResult().get(), text, type), null);
+                        }
+                    }
+                }
+            }
+        }
+        // the template of another source set of the build, mirroring the
+        // bytecode stripping which resolves classpath templates
+        return findExternalTemplate(with);
+    }
+
+    /**
+     * Resolves an {@code @Alter} template of another source set: the source
+     * set whose compiled classes contain the template class provides the
+     * template source. The template stays in its own source set's dejittered
+     * variant - like the bytecode stripping, which keeps classpath templates
+     * where they are.
+     */
+    private TemplateSource findExternalTemplate(final String with) throws IOException {
+        final String templatePath = with.replace('.', '/');
+        for (final Map.Entry<File, List<File>> entry : externalTemplateDirs.entrySet()) {
+            if (!new File(entry.getKey(), templatePath + ".class").isFile()) {
+                continue;
+            }
+            for (final File srcDir : entry.getValue()) {
+                final Path candidate = srcDir.toPath().resolve(templatePath + ".java");
+                if (Files.isRegularFile(candidate)) {
+                    return new TemplateSource(read(candidate), null);
                 }
             }
         }
