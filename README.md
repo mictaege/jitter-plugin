@@ -34,6 +34,7 @@ Until 2026.3 the flavour model was produced by transforming the Java sources wit
 - Stale resource report: resources whose owner class was removed ship anyway; the verify tasks report them as warnings.
 - Flavour switching without clean; all flavour-specific outputs are up-to-date checked, build-cache safe, and the verification reads removals from the cached manifests.
 - `dejitter<SrcSet>` tasks: the dejittered source variant of the active flavour - the original source minus the flavour specific code as source level surgery (comments, formatting and line numbers survive), with flavour processed resources and a removal cross check against the stripped model. For source deliveries; see below.
+- Kotlin sources dejitter like Java sources: `@OnlyIf` members, constructor parameters and enum entries, `@Fork` bodies, `@Alter` targets. The Kotlin parser resolves lazily from the repositories of the applying build and loads in an isolated classloader, so it never clashes with the Kotlin toolchain of the build.
 
 ## Migration
 
@@ -279,12 +280,14 @@ The ```dejitter<SrcSet>``` tasks create the source variant of the active flavour
 
 The dejittering is a source level surgery: every edit removes or replaces an exact span of the original file, so comments, javadoc, formatting and line numbers of the untouched parts survive - the variant reads like authored source, not like decompiled code. The semantics mirror the stripping:
 
-- ```@OnlyIf``` removes classes, packages (the package-info together with all classes of the package), fields, constructors, methods and enum constants
+- ```@OnlyIf``` removes classes, packages (the package-info together with all files of the package, regardless of their language), fields, constructors, methods and enum constants
 - ```@Fork``` replaces the gateway method's body with the template's body and removes the template method
-- ```@Alter``` replaces the target class with its template class (templates of the same source set; templates from other source sets are reported as unsupported)
+- ```@Alter``` replaces the target class with its template class; templates may live in the same source set or in another source set of the build (like the bytecode stripping, which resolves classpath templates)
 - the jitter annotations are removed from surviving elements, together with imports they leave behind
 
-The output mirrors the source set layout: the dejittered sources under ```java``` - non-Java source files of the source directories (Kotlin, Groovy, ...) are copied as they are, dejittering those languages is out of scope - and the flavour processed resources under ```resources```:
+The dejittering works for Java and Kotlin sources the same way - the Kotlin sources are parsed with the Kotlin compiler PSI, so the flavour constants of the annotation values resolve from the compile classpath like in Java. Other source files of the source directories (Groovy, ...) are copied as they are, dejittering those languages is out of scope.
+
+The output mirrors the source set layout: the dejittered sources under ```java``` and the flavour processed resources under ```resources```:
 
 ```
 build/jitter-dejittered/main
@@ -294,7 +297,7 @@ build/jitter-dejittered/main
 
 Annotation values may be compile time constants, like ```@OnlyIf(Flavour.MPK)``` - javac bakes them into the bytecode, the dejittering resolves them by reflecting the referenced constants class from the compile classpath of the source set.
 
-Every source level removal is cross checked against the removal manifest of the stripped model (the task runs after the strip task, so the manifest is fresh for the active flavour). The manifest may know more removals - annotation processors generate classes that have no source, package-infos are class nodes in the stripped model - but never less: a source level removal the bytecode stripping did not make fails the build, so the two pipelines cannot drift apart silently.
+Every source level removal is cross checked against the removal manifest of the stripped model (the task runs after the strip task, so the manifest is fresh for the active flavour). The manifest may know more removals - annotation processors generate classes that have no source, package-infos are class nodes in the stripped model - but never less: a source level removal the bytecode stripping did not make fails the build, and the other direction fails it as well - a kept source file of a class the stripping removed (like a Kotlin file whose package is only gated by the Java package-info) leaks flavour specific code into the delivery. The two pipelines cannot drift apart silently.
 
 The plugin does not compile the variant itself. A delivery build that needs the compilability guarantee wires it up like this:
 
