@@ -81,7 +81,13 @@ public final class Dejitterer {
 
     private static final List<String> JITTER_ANNOS = List.of(
             "OnlyIf", "Fork", "Gateway", "Alter", "Alternatives");
-    private static final JavaParser PARSER = new JavaParser(
+
+    /**
+     * One parser per dejittering run: the parser instances of JavaParser are
+     * not thread safe, and parallel builds run the dejitter tasks of several
+     * projects concurrently in one daemon.
+     */
+    private final JavaParser parser = new JavaParser(
             new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21));
 
     private final String activeFlavour;
@@ -157,7 +163,7 @@ public final class Dejitterer {
             if (!file.getFileName().toString().equals("package-info.java")) {
                 continue;
             }
-            final ParseResult<CompilationUnit> parsed = PARSER.parse(read(file));
+            final ParseResult<CompilationUnit> parsed = parser.parse(read(file));
             if (!parsed.isSuccessful() || parsed.getResult().isEmpty()) {
                 result.error("PARSE ERROR in " + file + ": " + parsed.getProblems());
                 continue;
@@ -187,7 +193,7 @@ public final class Dejitterer {
     private void processFile(final Path file, final Set<Path> sourceDirs, final Path outputDir,
                              final List<Path> javaFiles) throws IOException {
         final String text = read(file);
-        final ParseResult<CompilationUnit> parsed = PARSER.parse(text);
+        final ParseResult<CompilationUnit> parsed = parser.parse(text);
         if (!parsed.isSuccessful() || parsed.getResult().isEmpty()) {
             result.error("PARSE ERROR in " + file + ": " + parsed.getProblems());
             copy(file, sourceDirs, outputDir);
@@ -265,6 +271,23 @@ public final class Dejitterer {
 
     private void walkMembers(final CompilationUnit cu, final TypeDeclaration<?> type,
                              final String internal, final FileCtx ctx) {
+        // the fork templates are consumed before any member is processed: a
+        // template declared before its gateway would otherwise get its
+        // annotation cleaned in the walk, and the gateway's consumption would
+        // remove the same member afterwards - two edits on one span
+        for (final BodyDeclaration<?> member : type.getMembers()) {
+            if (member instanceof MethodDeclaration) {
+                final MethodDeclaration method = (MethodDeclaration) member;
+                final AnnotationExpr fork = activeFork(cu, method.getAnnotations());
+                if (fork != null) {
+                    final MethodDeclaration alt = findAlt(type, method,
+                            annotationValue(cu, fork, "to"));
+                    if (alt != null) {
+                        ctx.consumed.add(alt);
+                    }
+                }
+            }
+        }
         for (final BodyDeclaration<?> member : new ArrayList<>(type.getMembers())) {
             if (ctx.consumed.contains(member)) {
                 continue;
@@ -314,21 +337,7 @@ public final class Dejitterer {
 
     private void applyFork(final TypeDeclaration<?> owner, final MethodDeclaration gateway,
                            final String altName, final FileCtx ctx) {
-        MethodDeclaration alt = null;
-        for (final BodyDeclaration<?> member : owner.getMembers()) {
-            if (member instanceof MethodDeclaration) {
-                final MethodDeclaration cand = (MethodDeclaration) member;
-                if (!cand.equals(gateway) && cand.getNameAsString().equals(altName)) {
-                    if (signature(cand).equals(signature(gateway))) {
-                        alt = cand;
-                        break;
-                    }
-                    if (alt == null) {
-                        alt = cand;
-                    }
-                }
-            }
-        }
+        final MethodDeclaration alt = findAlt(owner, gateway, altName);
         if (alt == null) {
             result.error("The given alternative method " + altName + " could not be found in "
                     + owner.getNameAsString());
@@ -367,6 +376,31 @@ public final class Dejitterer {
         cleanJitterAnnotations(gateway, ctx);
     }
 
+    /**
+     * The alternative method of a fork gateway: the one with the gateway's
+     * own signature if present, otherwise the first with the given name -
+     * like the bytecode stripping, which prefers the matching signature and
+     * falls back to the name alone.
+     */
+    private MethodDeclaration findAlt(final TypeDeclaration<?> owner, final MethodDeclaration gateway,
+                                      final String altName) {
+        MethodDeclaration alt = null;
+        for (final BodyDeclaration<?> member : owner.getMembers()) {
+            if (member instanceof MethodDeclaration) {
+                final MethodDeclaration cand = (MethodDeclaration) member;
+                if (!cand.equals(gateway) && cand.getNameAsString().equals(altName)) {
+                    if (signature(cand).equals(signature(gateway))) {
+                        return cand;
+                    }
+                    if (alt == null) {
+                        alt = cand;
+                    }
+                }
+            }
+        }
+        return alt;
+    }
+
     private String signature(final MethodDeclaration method) {
         return method.getParameters().stream()
                 .map(p -> p.getType().asString())
@@ -388,7 +422,7 @@ public final class Dejitterer {
             return;
         }
         final String templateText = read(templateFile);
-        final ParseResult<CompilationUnit> parsed = PARSER.parse(templateText);
+        final ParseResult<CompilationUnit> parsed = parser.parse(templateText);
         if (!parsed.isSuccessful() || parsed.getResult().isEmpty()
                 || parsed.getResult().get().getTypes().isEmpty()) {
             result.error("The given alternative class " + with + " does not parse");
@@ -421,7 +455,7 @@ public final class Dejitterer {
         }
         result.info("Replace class " + target.getNameAsString() + " with " + with);
         // the replacement content may itself carry flavour annotations
-        final ParseResult<CompilationUnit> outParsed = PARSER.parse(out);
+        final ParseResult<CompilationUnit> outParsed = parser.parse(out);
         final CompilationUnit outCu = outParsed.getResult()
                 .orElseThrow(() -> new IllegalStateException("altered template does not parse"));
         final FileCtx ctx = new FileCtx(out);
@@ -723,7 +757,7 @@ public final class Dejitterer {
     }
 
     private String parsePackage(final Path file) throws IOException {
-        final ParseResult<CompilationUnit> parsed = PARSER.parse(read(file));
+        final ParseResult<CompilationUnit> parsed = parser.parse(read(file));
         return parsed.getResult()
                 .flatMap(CompilationUnit::getPackageDeclaration)
                 .map(p -> p.getNameAsString())

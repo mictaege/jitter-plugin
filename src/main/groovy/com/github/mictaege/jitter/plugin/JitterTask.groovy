@@ -10,6 +10,10 @@ import static com.github.mictaege.jitter.plugin.JitterUtil.FLAVOUR_PROP
 @DisableCachingByDefault(because = "the task only selects the active flavour and produces no output")
 class JitterTask extends DefaultTask {
 
+    JitterTask() {
+        group = JitterUtil.GROUP
+    }
+
     @Input
     FlavourCfg flavour
 

@@ -11,6 +11,10 @@ import java.util.regex.Pattern
 @DisableCachingByDefault(because = "the verification is a build check over the build directory and should always run")
 abstract class AbstractCriticalTermsTask extends DefaultTask {
 
+    AbstractCriticalTermsTask() {
+        group = JitterUtil.GROUP
+    }
+
     @TaskAction
     void run() {
         project.jitter.flavours.each { a ->

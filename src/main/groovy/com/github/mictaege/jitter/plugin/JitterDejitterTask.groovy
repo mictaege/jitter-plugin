@@ -34,6 +34,10 @@ import org.gradle.api.tasks.TaskAction
 @CacheableTask
 class JitterDejitterTask extends DefaultTask {
 
+    JitterDejitterTask() {
+        group = JitterUtil.GROUP
+    }
+
     /**
      * Relative path sensitivity, so the dejittered model can also be taken
      * from the build cache when the project lives at another location.
@@ -53,12 +57,25 @@ class JitterDejitterTask extends DefaultTask {
 
     /**
      * The removal manifest of the stripped model, the cross check reference.
-     * Optional: without a stripped model the cross check is skipped.
+     * A source set without classes gets no stripped model and no manifest,
+     * so the input is null then and the cross check is skipped - that is why
+     * the manifest is read through an optional getter instead of being an
+     * input file property of the configured path: the file validation would
+     * otherwise reject the missing manifest of an empty source set.
+     */
+    @Internal
+    File manifestFile
+
+    /**
+     * The manifest as a cross check input, but only when it exists: without
+     * a stripped model there is nothing to cross check against.
      */
     @PathSensitive(PathSensitivity.RELATIVE)
     @Optional
     @InputFile
-    File manifestFile
+    File getManifest() {
+        manifestFile != null && manifestFile.isFile() ? manifestFile : null
+    }
 
     /** Directory the dejittered source variant is written to. */
     @OutputDirectory

@@ -24,6 +24,10 @@ import org.gradle.api.tasks.TaskAction
 @CacheableTask
 class JitterStripTask extends DefaultTask {
 
+    JitterStripTask() {
+        group = JitterUtil.GROUP
+    }
+
     /**
      * Relative path sensitivity, so the stripped model can also be taken
      * from the build cache when the project lives at another location.

@@ -33,6 +33,7 @@ Until 2026.3 the flavour model was produced by transforming the Java sources wit
 - Scoped `jitterVerifyTestFixtures` / `jitterVerify<Name>` tasks: artifact tasks fail early on dangling references.
 - Stale resource report: resources whose owner class was removed ship anyway; the verify tasks report them as warnings.
 - Flavour switching without clean; all flavour-specific outputs are up-to-date checked, build-cache safe, and the verification reads removals from the cached manifests.
+- `dejitter<SrcSet>` tasks: the dejittered source variant of the active flavour - the original source minus the flavour specific code as source level surgery (comments, formatting and line numbers survive), with flavour processed resources and a removal cross check against the stripped model. For source deliveries; see below.
 
 ## Migration
 
@@ -256,6 +257,8 @@ The [eval.jitter](https://github.com/mictaege/eval.jitter) example shows the pat
 | ```jitterVerify``` | Aggregate verify: checks everything that ships or runs; every ```Test``` and ```JavaExec``` task depends on it |
 | ```jitterJar``` | The stripped runtime artifact of the main source set (classes + resources), replaces the plain jar in the runtime variant |
 | ```jitterTestFixturesJar``` | The stripped runtime artifact of the main and test fixtures source sets (generalized as ```jitter<Name>Jar``` for custom ```api``` source sets) |
+| ```dejitter<SrcSet>``` | The dejittered source variant of the source set (into ```build/jitter-dejittered/<srcSet>```), see below |
+| ```dejitter``` | The dejittered source variants of all source sets of the project: one task that depends on every ```dejitter<SrcSet>``` |
 | ```reportCriticalTerms``` / ```verifyCriticalTerms``` | Critical term verification, see below |
 
 ### Verification of dangling references
@@ -269,6 +272,41 @@ One construct is deliberately tolerated: javac's switch map classes (```Outer$N`
 - anonymous inner classes declared inside ```@OnlyIf``` methods
 - synthetic ```access$NNN``` accessor orphans
 - branchy field initializers (ternaries etc.) of removed fields
+
+### Dejittered source variant
+
+The ```dejitter<SrcSet>``` tasks create the source variant of the active flavour for source deliveries: the dejittered variant is the original source minus the flavour specific code, derived from the same annotations the bytecode stripping works on.
+
+The dejittering is a source level surgery: every edit removes or replaces an exact span of the original file, so comments, javadoc, formatting and line numbers of the untouched parts survive - the variant reads like authored source, not like decompiled code. The semantics mirror the stripping:
+
+- ```@OnlyIf``` removes classes, packages (the package-info together with all classes of the package), fields, constructors, methods and enum constants
+- ```@Fork``` replaces the gateway method's body with the template's body and removes the template method
+- ```@Alter``` replaces the target class with its template class (templates of the same source set; templates from other source sets are reported as unsupported)
+- the jitter annotations are removed from surviving elements, together with imports they leave behind
+
+The output mirrors the source set layout: the dejittered sources under ```java``` - non-Java source files of the source directories (Kotlin, Groovy, ...) are copied as they are, dejittering those languages is out of scope - and the flavour processed resources under ```resources```:
+
+```
+build/jitter-dejittered/main
+├── java
+└── resources
+```
+
+Annotation values may be compile time constants, like ```@OnlyIf(Flavour.MPK)``` - javac bakes them into the bytecode, the dejittering resolves them by reflecting the referenced constants class from the compile classpath of the source set.
+
+Every source level removal is cross checked against the removal manifest of the stripped model (the task runs after the strip task, so the manifest is fresh for the active flavour). The manifest may know more removals - annotation processors generate classes that have no source, package-infos are class nodes in the stripped model - but never less: a source level removal the bytecode stripping did not make fails the build, so the two pipelines cannot drift apart silently.
+
+The plugin does not compile the variant itself. A delivery build that needs the compilability guarantee wires it up like this:
+
+```groovy
+def dejitteredMain = tasks.named('dejitterMain')
+def compileDejitteredMain = tasks.register('compileDejitteredMain', JavaCompile) {
+    source = fileTree("$buildDir/jitter-dejittered/main/java")
+    classpath = sourceSets.main.compileClasspath
+    destinationDirectory = file("$buildDir/jitter-dejittered-compiled/main")
+    dependsOn dejitteredMain
+}
+```
 
 ### Stale resources
 

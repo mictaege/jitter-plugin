@@ -9,6 +9,7 @@ import org.gradle.api.logging.Logging;
 final class JitterUtil {
 
     static final String FLAVOUR_PROP = "jitter.active.flavour";
+    static final String GROUP = "jitter";
     private static final Logger logger = Logging.getLogger("jitter");
 
     private JitterUtil() {

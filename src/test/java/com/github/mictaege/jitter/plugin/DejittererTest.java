@@ -188,6 +188,32 @@ public class DejittererTest {
     }
 
     @Test
+    void forksTheMethodBodyWhenTheTemplateIsDeclaredBeforeTheGateway() throws Exception {
+        write("com/example/ReversedGate.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.Fork;\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                + "public class ReversedGate {\n"
+                + "  @OnlyIf(\"Esa\")\n"
+                + "  private String flavouredEsa() {\n"
+                + "    return \"esa\";\n"
+                + "  }\n"
+                + "  @Fork(to = \"flavouredEsa\", ifActive = \"Esa\")\n"
+                + "  public String flavour() {\n"
+                + "    return \"none\";\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        assertThat(result.getErrors().isEmpty(), is(true));
+        final String text = read("com/example/ReversedGate.java");
+        assertThat(text, containsString("public String flavour() {"));
+        assertThat(text, containsString("return \"esa\";"));
+        assertThat(text, not(containsString("flavouredEsa")));
+    }
+
+    @Test
     void forkTakesOverTheTemplateThrowsClause() throws Exception {
         write("com/example/ThrowingGate.java",
                 "package com.example;\n"

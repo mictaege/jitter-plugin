@@ -24,6 +24,10 @@ import java.io.IOException
 @DisableCachingByDefault(because = "the verification is a build check over the stripped model and should always run")
 class JitterVerifyTask extends DefaultTask {
 
+    JitterVerifyTask() {
+        group = JitterUtil.GROUP
+    }
+
     @Internal
     List<JitterStripTask> stripTasks = []
 

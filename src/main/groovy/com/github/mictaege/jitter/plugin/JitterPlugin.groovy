@@ -40,6 +40,7 @@ class JitterPlugin implements Plugin<Project>  {
         project.afterEvaluate({ ->
             def roles = sourceSetRoles(project)
             def stripTasks = []
+            def dejitterTasks = []
             def allClassesDirs = [] as Set
             def allResourcesDirs = [] as Set
             def manifestClasspath = project.files()
@@ -68,6 +69,7 @@ class JitterPlugin implements Plugin<Project>  {
                     // model, so it runs after the strip task
                     def dejitterTask = project.task(
                             "dejitter${srcSet.name.capitalize()}", type: JitterDejitterTask)
+                    dejitterTasks << dejitterTask
                     dejitterTask.sourceDirs = srcSet.java.srcDirs
                     def resourcesDir = srcSet.output.resourcesDir
                     if (resourcesDir != null) {
@@ -148,6 +150,7 @@ class JitterPlugin implements Plugin<Project>  {
                     def strippedJar = project.tasks.create(
                             p.name == 'main' ? 'jitterJar' : "jitter${cap}Jar",
                             org.gradle.api.tasks.bundling.Jar) {
+                        group = JitterUtil.GROUP
                         destinationDirectory = new File(project.buildDir, 'jitter-libs')
                         from(p.strip.outputDir)
                         from(p.srcSet.output.resourcesDir)
@@ -210,6 +213,7 @@ class JitterPlugin implements Plugin<Project>  {
 
                     def strippedApiJar = project.tasks.create("jitter${cap}Jar",
                             org.gradle.api.tasks.bundling.Jar) {
+                        group = JitterUtil.GROUP
                         destinationDirectory = new File(project.buildDir, 'jitter-libs')
                         // the trees may carry the same package-info;
                         // first (packaging) wins, like the old jar
@@ -243,6 +247,13 @@ class JitterPlugin implements Plugin<Project>  {
                 verifyTask.allResourcesDirs = allResourcesDirs
                 verifyTask.dependencyClasspath = manifestClasspath
                 verifyTask.dependsOn stripTasks
+
+                // the aggregate dejittering of the project: one task for all
+                // source sets, like the aggregate verify
+                project.task("dejitter") {
+                    group = JitterUtil.GROUP
+                    dependsOn dejitterTasks
+                }
 
                 project.tasks.withType(Test).configureEach { it.dependsOn verifyTask }
                 project.tasks.withType(JavaExec).configureEach { it.dependsOn verifyTask }
