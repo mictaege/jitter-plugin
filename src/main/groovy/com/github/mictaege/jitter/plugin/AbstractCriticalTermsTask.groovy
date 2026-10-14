@@ -30,6 +30,10 @@ abstract class AbstractCriticalTermsTask extends DefaultTask {
                         // which includes the flavour specific terms of the
                         // inactive flavours by design
                         tree.excludes.add('**/' + RemovalManifest.DIR + '**')
+                        // the dejittered source variant keeps the untouched
+                        // sources of the other languages (Kotlin, Groovy, ...)
+                        // with all their flavour annotations
+                        tree.excludes.add(JitterUtil.DEJITTERED_DIR + '/**')
                         tree.visit {f ->
                             if (!f.isDirectory() && f.size < 1024 * fl.criticalTerms.sizeLimitKb) {
                                 fl.criticalTerms.patterns.each { p ->

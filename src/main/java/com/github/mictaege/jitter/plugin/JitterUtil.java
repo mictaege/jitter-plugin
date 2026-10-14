@@ -10,6 +10,7 @@ final class JitterUtil {
 
     static final String FLAVOUR_PROP = "jitter.active.flavour";
     static final String GROUP = "jitter";
+    static final String DEJITTERED_DIR = "jitter-dejittered";
     private static final Logger logger = Logging.getLogger("jitter");
 
     private JitterUtil() {
