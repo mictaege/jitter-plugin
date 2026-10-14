@@ -293,6 +293,57 @@ public class DejittererTest {
     }
 
     @Test
+    void altersWithAFullyQualifiedTemplateOfAnotherPackage() throws Exception {
+        write("com/example/Default.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.Alter;\n"
+                + "@Alter(ifActive = \"Esa\", with = \"com.example.nasa.NasaDefault\")\n"
+                + "public class Default {\n"
+                + "  public String value() { return \"none\"; }\n"
+                + "}\n");
+        write("com/example/nasa/NasaDefault.java",
+                "package com.example.nasa;\n"
+                + "public class NasaDefault {\n"
+                + "  public String value() { return NasaDefault.class.getSimpleName() + \"!\"; }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        assertThat(Files.exists(out.resolve("com/example/Default.java")), is(true));
+        assertThat(Files.exists(out.resolve("com/example/nasa/NasaDefault.java")), is(false));
+        final String text = read("com/example/Default.java");
+        assertThat(text, containsString("package com.example;"));
+        assertThat(text, containsString("public class Default"));
+        assertThat(text, containsString("Default.class.getSimpleName()"));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
+    void altersWithATemplateDeclaredInAnotherFileOfTheSamePackage() throws Exception {
+        write("com/example/Variant.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.Alter;\n"
+                + "@Alter(ifActive = \"Esa\", with = \"EsaVariant\")\n"
+                + "public class Variant {\n"
+                + "  public String value() { return \"none\"; }\n"
+                + "}\n"
+                + "/** the esa flavour variant, declared in the same file */\n"
+                + "@com.github.mictaege.jitter.api.OnlyIf(\"Esa\")\n"
+                + "final class EsaVariant {\n"
+                + "  public String value() { return EsaVariant.class.getSimpleName() + \"!\"; }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        assertThat(Files.exists(out.resolve("com/example/Variant.java")), is(true));
+        final String text = read("com/example/Variant.java");
+        assertThat(text, containsString("public final class Variant"));
+        assertThat(text, containsString("Variant.class.getSimpleName()"));
+        assertThat(text, not(containsString("EsaVariant")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
     void resolvesFlavourConstantsFromTheCompileClasspath() throws Exception {
         write("com/example/ConstantsGate.java",
                 "package com.example;\n"

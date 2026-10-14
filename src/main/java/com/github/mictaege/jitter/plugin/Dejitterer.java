@@ -414,14 +414,17 @@ public final class Dejitterer {
                             final TypeDeclaration<?> target, final AnnotationExpr alter)
             throws IOException {
         final String with = annotationValue(targetCu, alter, "with");
-        final Path templateFile = file.getParent().resolve(with + ".java");
-        if (!Files.isRegularFile(templateFile)) {
-            result.error("The given alternative class " + with + " could not be found next to "
-                    + file.getFileName() + " - alternative classes of other source sets"
+        final TemplateSource templateSource = findTemplate(with, file, sourceDirs);
+        if (templateSource == null) {
+            result.error("The given alternative class " + with + " could not be found in the"
+                    + " source set - alternative classes of other source sets"
                     + " are not supported by the source level dejittering");
             return;
         }
-        final String templateText = read(templateFile);
+        // the template takes over the target's simple name: with a fully
+        // qualified template only the simple name is replaced
+        final String templateName = with.substring(with.lastIndexOf('.') + 1);
+        final String templateText = templateSource.text;
         final ParseResult<CompilationUnit> parsed = parser.parse(templateText);
         if (!parsed.isSuccessful() || parsed.getResult().isEmpty()
                 || parsed.getResult().get().getTypes().isEmpty()) {
@@ -429,7 +432,10 @@ public final class Dejitterer {
             return;
         }
         final CompilationUnit templateCu = parsed.getResult().get();
-        final TypeDeclaration<?> template = templateCu.getTypes().get(0);
+        final TypeDeclaration<?> template = templateCu.getTypes().stream()
+                .filter(t -> t.getNameAsString().equals(templateName))
+                .findFirst()
+                .orElse(templateCu.getTypes().get(0));
         final boolean targetPublic = target.getModifiers().contains(Modifier.publicModifier());
         final boolean templatePublic = template.getModifiers().contains(Modifier.publicModifier());
         String out = templateText;
@@ -443,7 +449,7 @@ public final class Dejitterer {
             out = delete(out, offset(out, modifierRange.begin), offset(out, modifierRange.end) + 1);
         }
         // the template takes over the target's simple name
-        out = out.replaceAll("(?<![A-Za-z0-9_$])" + Pattern.quote(with) + "(?![A-Za-z0-9_$])",
+        out = out.replaceAll("(?<![A-Za-z0-9_$])" + Pattern.quote(templateName) + "(?![A-Za-z0-9_$])",
                 java.util.regex.Matcher.quoteReplacement(target.getNameAsString()));
         // the template moves into the target's package
         final String targetPkg = targetCu.getPackageDeclaration()
@@ -465,10 +471,12 @@ public final class Dejitterer {
         }
         write(file, sourceDirs, outputDir, pruneImports(ctx.apply()));
         deletedFiles.add(file);
-        deletedFiles.add(templateFile);
-        // the template may already have been visited and written before its
-        // target was reached - remove what came out of that
-        Files.deleteIfExists(outputDir.resolve(relative(templateFile, sourceDirs)));
+        if (templateSource.file != null) {
+            deletedFiles.add(templateSource.file);
+            // the template may already have been visited and written before
+            // its target was reached - remove what came out of that
+            Files.deleteIfExists(outputDir.resolve(relative(templateSource.file, sourceDirs)));
+        }
     }
 
     // ------------------------------------------------------------ annotations
@@ -608,6 +616,109 @@ public final class Dejitterer {
         // no reflection possible: the plain field name is the best guess,
         // the manifest cross check will report if it guessed wrong
         return field;
+    }
+
+    /**
+     * The source of an {@code @Alter} template, mirroring the bytecode
+     * stripping, which knows classes and not files: a simple name is a
+     * neighbor file first, a fully qualified name is resolved by package
+     * within the source directories, and as the fallback the template is a
+     * top level type declared in any file of its package - javac allows more
+     * than one top level type per file.
+     */
+    private TemplateSource findTemplate(final String with, final Path targetFile,
+                                        final Set<Path> sourceDirs) throws IOException {
+        if (with.indexOf('.') < 0) {
+            final Path neighbor = targetFile.getParent().resolve(with + ".java");
+            if (Files.isRegularFile(neighbor)) {
+                return new TemplateSource(read(neighbor), neighbor);
+            }
+        } else {
+            for (final Path dir : sourceDirs) {
+                final Path candidate = dir.resolve(with.replace('.', '/') + ".java");
+                if (Files.isRegularFile(candidate)) {
+                    return new TemplateSource(read(candidate), candidate);
+                }
+            }
+        }
+        final String templateName = with.substring(with.lastIndexOf('.') + 1);
+        final Path packageDir = templatePackageDir(with, targetFile, sourceDirs);
+        if (packageDir == null) {
+            return null;
+        }
+        try (Stream<Path> files = Files.list(packageDir)) {
+            for (final Path candidate : files.sorted().collect(Collectors.toList())) {
+                if (!candidate.toString().endsWith(".java")) {
+                    continue;
+                }
+                final String text = read(candidate);
+                final ParseResult<CompilationUnit> parsed = parser.parse(text);
+                if (!parsed.isSuccessful() || parsed.getResult().isEmpty()) {
+                    continue;
+                }
+                for (final TypeDeclaration<?> type : parsed.getResult().get().getTypes()) {
+                    if (type.getNameAsString().equals(templateName)) {
+                        return new TemplateSource(typeSource(parsed.getResult().get(), text, type),
+                                null);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private Path templatePackageDir(final String with, final Path targetFile, final Set<Path> sourceDirs) {
+        if (with.indexOf('.') < 0) {
+            return targetFile.getParent();
+        }
+        final String pkg = with.substring(0, with.lastIndexOf('.'));
+        for (final Path dir : sourceDirs) {
+            final Path candidate = dir.resolve(pkg.replace('.', '/'));
+            if (Files.isDirectory(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The source file of one top level type of another file: the package
+     * declaration and imports of the host file with the type's own text.
+     */
+    private String typeSource(final CompilationUnit host, final String hostText,
+                             final TypeDeclaration<?> type) {
+        final StringBuilder out = new StringBuilder();
+        if (host.getPackageDeclaration().isPresent()) {
+            out.append("package ").append(host.getPackageDeclaration().get().getNameAsString())
+                    .append(";\n\n");
+        }
+        for (final ImportDeclaration imp : host.getImports()) {
+            out.append(imp);
+        }
+        if (!host.getImports().isEmpty()) {
+            out.append('\n');
+        }
+        Range range = type.getRange().orElseThrow(IllegalStateException::new);
+        if (type.getJavadocComment().isPresent()
+                && type.getJavadocComment().get().getRange().isPresent()) {
+            range = new Range(
+                    type.getJavadocComment().get().getRange().get().begin.isBefore(range.begin)
+                            ? type.getJavadocComment().get().getRange().get().begin : range.begin,
+                    range.end);
+        }
+        out.append(hostText.substring(offset(hostText, range.begin), offset(hostText, range.end) + 1));
+        out.append('\n');
+        return out.toString();
+    }
+
+    private static final class TemplateSource {
+        private final String text;
+        private final Path file;
+
+        private TemplateSource(final String text, final Path file) {
+            this.text = text;
+            this.file = file;
+        }
     }
 
     private List<String> classCandidates(final CompilationUnit cu, final String scope) {
