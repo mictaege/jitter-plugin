@@ -47,7 +47,7 @@ class BuildCacheFunctionalTest {
                 mavenCentral()
             }
             dependencies {
-                implementation 'io.github.mictaege:jitter-api:2026.3-rc2'
+                implementation 'io.github.mictaege:jitter-api:2026.3-rc3'
             }
             jitter {
                 flavour { name = 'A' }
