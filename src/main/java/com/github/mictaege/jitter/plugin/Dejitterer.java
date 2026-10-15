@@ -91,7 +91,7 @@ public final class Dejitterer implements AutoCloseable {
     private final List<File> compileClasspath;
     private final Map<File, List<File>> externalTemplateDirs;
     private final StripResult result = new StripResult();
-    private final Set<Path> removedPackageDirs = new HashSet<>();
+    private final Set<String> removedPackages = new HashSet<>();
     private final Set<Path> deletedFiles = new LinkedHashSet<>();
     private ClasspathConstants constants;
     private KotlinDejitter kotlin;
@@ -173,7 +173,7 @@ public final class Dejitterer implements AutoCloseable {
             if (deletedFiles.contains(file)) {
                 continue;
             }
-            if (isRemovedPackageDir(file.getParent())) {
+            if (inRemovedPackage(file, sourceDirs)) {
                 result.removedClass(removedClassOf(file, parsePackage(file)));
                 deletedFiles.add(file);
                 result.info("Remove class " + removedClassOf(file, parsePackage(file))
@@ -190,7 +190,7 @@ public final class Dejitterer implements AutoCloseable {
                 if (deletedFiles.contains(file)) {
                     continue;
                 }
-                if (isRemovedPackageDir(file.getParent())) {
+                if (inRemovedPackage(file, sourceDirs)) {
                     if (kotlinDejitterer == null) {
                         kotlinDejitterer = kotlin(sourceDirs, outputDir);
                     }
@@ -212,7 +212,7 @@ public final class Dejitterer implements AutoCloseable {
         }
 
         for (final Path file : otherFiles) {
-            if (deletedFiles.contains(file) || isRemovedPackageDir(file.getParent())) {
+            if (deletedFiles.contains(file) || inRemovedPackage(file, sourceDirs)) {
                 continue;
             }
             copy(file, sourceDirs, outputDir);
@@ -240,7 +240,7 @@ public final class Dejitterer implements AutoCloseable {
     private void recordKeptSourceClasses(final List<Path> files, final Set<Path> sourceDirs)
             throws IOException {
         for (final Path file : files) {
-            if (deletedFiles.contains(file) || isRemovedPackageDir(file.getParent())) {
+            if (deletedFiles.contains(file) || inRemovedPackage(file, sourceDirs)) {
                 continue;
             }
             final String relative = relative(file, sourceDirs).toString().replace('\\', '/');
@@ -272,16 +272,29 @@ public final class Dejitterer implements AutoCloseable {
             final List<String> flavours = onlyIfFlavours(cu,
                     cu.getPackageDeclaration().get().getAnnotations());
             if (flavours != null && flavours.stream().noneMatch(this::active)) {
-                final Path dir = file.getParent();
-                removedPackageDirs.add(dir);
+                final String pkg = cu.getPackageDeclaration().get().getNameAsString();
+                removedPackages.add(pkg.replace('.', '/'));
                 deletedFiles.add(file);
-                result.info("Remove package " + dir);
+                result.info("Remove package " + pkg);
             }
         }
     }
 
-    private boolean isRemovedPackageDir(final Path dir) {
-        return dir != null && removedPackageDirs.contains(dir);
+    /**
+     * The package gate of a package-info covers every file of the package,
+     * no matter which source root it comes from: like the bytecode
+     * stripping, which knows packages and not files, the generated sources
+     * of a package often live in their own source root beside the hand
+     * written package-info.
+     */
+    private boolean inRemovedPackage(final Path file, final Set<Path> sourceDirs) {
+        if (removedPackages.isEmpty()) {
+            return false;
+        }
+        final String relative = relative(file, sourceDirs).toString().replace('\\', '/');
+        final int lastSlash = relative.lastIndexOf('/');
+        final String pkgPath = lastSlash < 0 ? "" : relative.substring(0, lastSlash);
+        return removedPackages.contains(pkgPath);
     }
 
     // ---------------------------------------------------------------- files

@@ -129,6 +129,38 @@ public class DejittererTest {
     }
 
     /**
+     * The package gate of a package-info covers every file of the package,
+     * no matter which source root it comes from: the generated sources of a
+     * package often live in their own source root beside the hand written
+     * package-info, and the bytecode stripping knows packages and not files.
+     */
+    @Test
+    void removesThePackageOfAnInactivePackageInfoAcrossSourceRoots() throws Exception {
+        final Path generated = workDir.resolve("generated");
+        write("com/example/nasa/package-info.java",
+                "@com.github.mictaege.jitter.api.OnlyIf(\"Nasa\")\n"
+                + "package com.example.nasa;\n");
+        write(generated, "com/example/nasa/NasaTool.java",
+                "package com.example.nasa;\n"
+                + "public class NasaTool { }\n");
+        write(generated, "com/example/plain/PlainTool.java",
+                "package com.example.plain;\n"
+                + "public class PlainTool { }\n");
+
+        final Dejitterer dejitterer = new Dejitterer("Esa", List.of());
+        final StripResult result;
+        try {
+            result = dejitterer.dejitter(Set.of(src, generated), out);
+        } finally {
+            dejitterer.close();
+        }
+
+        assertThat(Files.exists(out.resolve("com/example/nasa/NasaTool.java")), is(false));
+        assertThat(result.getRemovedClasses(), is(Set.of("com/example/nasa/NasaTool")));
+        assertThat(result.getKeptSourceClasses(), is(Set.of("com/example/plain/PlainTool")));
+    }
+
+    /**
      * The package gate lives in the Java package-info and covers every
      * language of the package: the Kotlin files of the package carry no
      * annotations of their own and must leave the variant together with the
@@ -555,7 +587,11 @@ public class DejittererTest {
     }
 
     private void write(final String relative, final String content) throws IOException {
-        final Path file = src.resolve(relative);
+        write(src, relative, content);
+    }
+
+    private void write(final Path base, final String relative, final String content) throws IOException {
+        final Path file = base.resolve(relative);
         Files.createDirectories(file.getParent());
         Files.writeString(file, content, StandardCharsets.UTF_8);
     }
