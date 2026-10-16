@@ -4,6 +4,7 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.FileCollection
 import org.gradle.api.tasks.CacheableTask
+import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
@@ -46,8 +47,14 @@ class JitterStripTask extends DefaultTask {
     @Internal
     String manifestName
 
-    /** Classpath for @Alter templates that live in dependent libraries. */
-    @Internal
+    /**
+     * Classpath for @Alter templates that live in dependent libraries.
+     * A classpath input: the templates are read and inlined at strip time,
+     * so a template change must invalidate the task even when the module's
+     * own compiled classes stay unchanged.
+     */
+    @Optional
+    @Classpath
     FileCollection templateClasspath
 
     @Internal

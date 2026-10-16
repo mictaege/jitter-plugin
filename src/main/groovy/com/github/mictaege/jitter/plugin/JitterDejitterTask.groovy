@@ -4,6 +4,7 @@ import org.gradle.api.GradleException
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.FileCollection
 import org.gradle.api.tasks.CacheableTask
+import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.InputFiles
@@ -51,8 +52,13 @@ class JitterDejitterTask extends DefaultTask {
     @InputFiles
     Set<File> resourceDirs = []
 
-    /** Classpath for resolving compile time constants of annotation values. */
-    @Internal
+    /**
+     * Classpath for resolving compile time constants of annotation values.
+     * A classpath input: a changed constant value must invalidate the task,
+     * otherwise the dejittered variant would keep the old annotation values.
+     */
+    @Optional
+    @Classpath
     FileCollection compileClasspath
 
     /**
