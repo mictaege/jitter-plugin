@@ -47,7 +47,7 @@ final class AlterApplier {
                     : JitterAnnotations.packageOf(target.name) + with;
             final ClassNode template = ctx.nodes.containsKey(templateName)
                     ? ctx.nodes.get(templateName)
-                    : ClassIndex.loadFromClasspath(ctx.templateClasspath, templateName);
+                    : ClassIndex.loadFromClasspath(ctx.templateClasspath, templateName, ctx.result);
             if (template == null) {
                 ctx.result.error("The given alternative class " + with + " could not be found");
                 continue;

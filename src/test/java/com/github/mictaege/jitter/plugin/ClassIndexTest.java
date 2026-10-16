@@ -36,7 +36,7 @@ public class ClassIndexTest extends StripperTestFixture {
 
         final Map<String, ClassNode> nodes = new java.util.HashMap<>();
         final Map<String, Path> paths = new java.util.HashMap<>();
-        ClassIndex.loadClasses(classes, nodes, paths);
+        ClassIndex.loadClasses(classes, nodes, paths, new StripResult());
 
         assertThat(nodes.containsKey("test/One"), is(true));
         assertThat(nodes.containsKey("test/Two"), is(true));
@@ -48,7 +48,7 @@ public class ClassIndexTest extends StripperTestFixture {
         final Map<String, ClassNode> nodes = new java.util.HashMap<>();
         final Map<String, Path> paths = new java.util.HashMap<>();
 
-        ClassIndex.loadClasses(workDir.resolve("nope"), nodes, paths);
+        ClassIndex.loadClasses(workDir.resolve("nope"), nodes, paths, new StripResult());
 
         assertThat(nodes.isEmpty(), is(true));
     }
@@ -60,10 +60,10 @@ public class ClassIndexTest extends StripperTestFixture {
                         + "public class Template { }\n");
 
         final ClassNode loaded = ClassIndex.loadFromClasspath(
-                List.of(classes.toFile()), "test/Template");
+                List.of(classes.toFile()), "test/Template", new StripResult());
 
         assertThat(loaded.name, is("test/Template"));
-        assertThat(ClassIndex.loadFromClasspath(List.of(classes.toFile()), "test/Missing"), is(nullValue()));
+        assertThat(ClassIndex.loadFromClasspath(List.of(classes.toFile()), "test/Missing", new StripResult()), is(nullValue()));
     }
 
     @Test
@@ -80,11 +80,11 @@ public class ClassIndexTest extends StripperTestFixture {
         }
 
         final ClassNode loaded = ClassIndex.loadFromClasspath(
-                List.of(jar.toFile()), "test/Template");
+                List.of(jar.toFile()), "test/Template", new StripResult());
 
         assertThat(loaded.name, is("test/Template"));
-        assertThat(ClassIndex.loadFromClasspath(List.of(jar.toFile()), "test/Missing"), is(nullValue()));
-        assertThat(ClassIndex.loadFromClasspath(null, "test/Template"), is(nullValue()));
+        assertThat(ClassIndex.loadFromClasspath(List.of(jar.toFile()), "test/Missing", new StripResult()), is(nullValue()));
+        assertThat(ClassIndex.loadFromClasspath(null, "test/Template", new StripResult()), is(nullValue()));
     }
 
 }

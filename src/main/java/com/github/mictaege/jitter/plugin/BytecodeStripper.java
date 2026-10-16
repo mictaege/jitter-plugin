@@ -81,7 +81,7 @@ public final class BytecodeStripper {
         final StripContext ctx = new StripContext(templateClasspath);
 
         for (final Path dir : sourceDirs) {
-            ClassIndex.loadClasses(dir, ctx.nodes, ctx.paths);
+            ClassIndex.loadClasses(dir, ctx.nodes, ctx.paths, ctx.result);
         }
 
         PackageRemover.remove(ctx);

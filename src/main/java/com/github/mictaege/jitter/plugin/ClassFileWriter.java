@@ -28,7 +28,6 @@ final class ClassFileWriter {
         } else {
             writeStrippedTree(targetDir, ctx);
         }
-        ctx.result.getInfos().forEach(msg -> JitterUtil.log().info(msg));
     }
 
     private static void writeBackInPlace(final List<Path> classesDirs, final StripContext ctx)

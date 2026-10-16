@@ -128,9 +128,9 @@ class JitterDejitterTask extends DefaultTask {
         } finally {
             dejitterer.close()
         }
-        result.infos.each { logger.lifecycle(it) }
+        result.infos.each { logger.lifecycle("jitter: " + it) }
         if (!result.errors.isEmpty()) {
-            throw new GradleException("jitter dejittering failed:\n  " + result.errors.join("\n  "))
+            throw new GradleException("jitter: dejittering failed:\n  " + result.errors.join("\n  "))
         }
         copyResources()
         crossCheckManifest(result)

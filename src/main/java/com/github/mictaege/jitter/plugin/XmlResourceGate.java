@@ -103,7 +103,9 @@ final class XmlResourceGate {
                 }
             }
         } catch (final IOException e) {
-            JitterUtil.log().warn("Could not read the flavour gate of " + file + ": "
+            // the resource processing has no strip result to report through:
+            // the prefixed logger call is the only channel here
+            JitterUtil.log().warn("jitter: could not read the flavour gate of " + file + ": "
                     + e.getMessage());
         }
         return flavours.isEmpty() ? null : flavours;

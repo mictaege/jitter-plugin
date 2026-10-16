@@ -80,7 +80,7 @@ abstract class StripperTestFixture {
     /** Loads the compiled classes into a fresh context. */
     final StripContext loadCtx(final Path classesDir) throws IOException {
         final StripContext ctx = new StripContext(null);
-        ClassIndex.loadClasses(classesDir, ctx.nodes, ctx.paths);
+        ClassIndex.loadClasses(classesDir, ctx.nodes, ctx.paths, ctx.result);
         return ctx;
     }
 

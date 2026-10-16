@@ -27,7 +27,7 @@ final class ClassIndex {
     }
 
     static void loadClasses(final Path classesDir, final Map<String, ClassNode> nodes,
-                            final Map<String, Path> paths) throws IOException {
+                            final Map<String, Path> paths, final StripResult result) throws IOException {
         if (!Files.isDirectory(classesDir)) {
             return;
         }
@@ -43,7 +43,7 @@ final class ClassIndex {
                         nodes.put(internalName, node);
                         paths.put(internalName, file);
                     } catch (final IOException e) {
-                        JitterUtil.log().error("Could not read class file " + file + ": " + e.getMessage());
+                        result.error("Could not read class file " + file + ": " + e.getMessage());
                     }
                 }
                 return FileVisitResult.CONTINUE;
@@ -62,7 +62,8 @@ final class ClassIndex {
      * entry contains it. Used for {@code @Alter} templates that live in a
      * dependent library instead of the stripped classes themselves.
      */
-    static ClassNode loadFromClasspath(final List<File> classpath, final String internalName) {
+    static ClassNode loadFromClasspath(final List<File> classpath, final String internalName,
+                                        final StripResult result) {
         if (classpath == null) {
             return null;
         }
@@ -91,7 +92,7 @@ final class ClassIndex {
                 new ClassReader(bytes).accept(node, 0);
                 return node;
             } catch (final IOException e) {
-                JitterUtil.log().warn("Could not read " + internalName + " from classpath entry " + entry + ": "
+                result.warn("Could not read " + internalName + " from classpath entry " + entry + ": "
                         + e.getMessage());
             }
         }

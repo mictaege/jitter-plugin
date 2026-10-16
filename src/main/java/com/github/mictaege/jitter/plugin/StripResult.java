@@ -19,6 +19,7 @@ public final class StripResult {
     private final TreeSet<String> removedMembers = new TreeSet<>();
     private final List<String> removedFields = new ArrayList<>();
     private final List<String> errors = new ArrayList<>();
+    private final List<String> warnings = new ArrayList<>();
     private final List<String> infos = new ArrayList<>();
 
     /**
@@ -33,6 +34,7 @@ public final class StripResult {
         removedMembers.addAll(other.removedMembers);
         removedFields.addAll(other.removedFields);
         errors.addAll(other.errors);
+        warnings.addAll(other.warnings);
         infos.addAll(other.infos);
     }
 
@@ -64,6 +66,10 @@ public final class StripResult {
 
     public void error(final String message) {
         errors.add(message);
+    }
+
+    public void warn(final String message) {
+        warnings.add(message);
     }
 
     public void info(final String message) {
@@ -102,6 +108,10 @@ public final class StripResult {
 
     public List<String> getErrors() {
         return errors;
+    }
+
+    public List<String> getWarnings() {
+        return warnings;
     }
 
     public List<String> getInfos() {

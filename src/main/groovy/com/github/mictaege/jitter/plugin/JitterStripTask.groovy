@@ -1,6 +1,7 @@
 package com.github.mictaege.jitter.plugin
 
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.file.FileCollection
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
@@ -78,9 +79,14 @@ class JitterStripTask extends DefaultTask {
                 ? stripper.strip(sourceDirs, null, templateClasspathFiles)
                 : stripper.strip(sourceDirs, outputDir.toPath(), templateClasspathFiles)
         stripResult.merge(result)
-        stripResult.infos.each { logger.lifecycle(it) }
+        // one output format for everything the plugin says: every line is
+        // prefixed with 'jitter: ', the severity comes from the log level -
+        // plain lifecycle output for information, warnings rendered as
+        // warnings, errors fail the task
+        stripResult.infos.each { logger.lifecycle("jitter: " + it) }
+        stripResult.warnings.each { logger.warn("jitter: " + it) }
         if (!stripResult.errors.isEmpty()) {
-            stripResult.errors.each { logger.error(it) }
+            throw new GradleException("jitter: stripping failed:\n  " + stripResult.errors.join("\n  "))
         }
         // the removal manifest travels in the stripped tree, so it ends up in
         // the stripped runtime artifacts; consumers read it from the classpath

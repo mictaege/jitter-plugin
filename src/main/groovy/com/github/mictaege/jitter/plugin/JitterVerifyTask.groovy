@@ -61,7 +61,7 @@ class JitterVerifyTask extends DefaultTask {
                             removedClasses, removedMembers)
                 } catch (IOException e) {
                     throw new GradleException(
-                            "Could not read the removal manifest of the stripped ${task.manifestName} model", e)
+                            "jitter: could not read the removal manifest of the stripped ${task.manifestName} model", e)
                 }
             } else {
                 // in-place stripping has no manifest - the result of the
@@ -76,18 +76,19 @@ class JitterVerifyTask extends DefaultTask {
             try {
                 RemovalManifest.read(file, removedClasses, removedMembers)
             } catch (IOException e) {
-                throw new GradleException("Could not read the flavour removal manifest of ${file}", e)
+                throw new GradleException("jitter: could not read the flavour removal manifest of ${file}", e)
             }
         }
 
         def violations = ReferenceVerifier.findDanglingReferences(allClassesDirs, removedClasses, removedMembers)
 
         if (!errors.isEmpty()) {
-            throw new GradleException("jitter stripping failed:\n  " + errors.join("\n  "))
+            throw new GradleException("jitter: stripping failed:\n  " + errors.join("\n  "))
         }
         if (!violations.isEmpty()) {
             throw new GradleException(
-                    "The build contains references to flavour specific code that is not part of the active flavour:\n  "
+                    "jitter: the build contains references to flavour specific code"
+                            + " that is not part of the active flavour:\n  "
                             + violations.join("\n  "))
         }
         reportStaleResources(removedClasses)

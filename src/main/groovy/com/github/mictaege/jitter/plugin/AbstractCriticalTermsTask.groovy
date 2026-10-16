@@ -62,7 +62,7 @@ abstract class AbstractCriticalTermsTask extends DefaultTask {
 class VerifyCriticalTermsTask extends AbstractCriticalTermsTask {
 
     void onViolations() {
-        throw new GradleException('Violation of critical terms detected. See report for details')
+        throw new GradleException('jitter: violation of critical terms detected, see report for details')
     }
 
 }

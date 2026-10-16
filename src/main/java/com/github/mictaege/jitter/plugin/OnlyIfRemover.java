@@ -126,7 +126,6 @@ final class OnlyIfRemover {
             ctx.nodes.remove(removed);
             ctx.result.removedClass(removed);
             ctx.result.info("Remove class " + removed.replace('/', '.'));
-            JitterUtil.log().info("Remove class " + removed.replace('/', '.'));
             ctx.dirty.add(removed);
         });
     }

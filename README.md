@@ -262,6 +262,14 @@ The [eval.jitter](https://github.com/mictaege/eval.jitter) example shows the pat
 | ```dejitter``` | The dejittered source variants of all source sets of the project: one task that depends on every ```dejitter<SrcSet>``` |
 | ```reportCriticalTerms``` / ```verifyCriticalTerms``` | Critical term verification, see below |
 
+### Output format
+
+Every line the plugin writes to the build log starts with the ```jitter: ``` prefix, so flavour output and build output of other plugins are distinguishable - in the terminal as well as in the log of a build server. The severity comes from the Gradle log level:
+
+- information: plain lifecycle output, visible by default, suppressed with ```-q```, e.g. ```jitter: Remove method com.zitecs.SomeClass#someMethod```
+- warning: rendered and counted as a build warning, e.g. ```jitter: resource X ships without its owner class Y (removed by the active flavour)```
+- error: fails the task, the failure message under *What went wrong* carries the prefix as well, e.g. ```jitter: the build contains references to flavour specific code that is not part of the active flavour```
+
 ### Verification of dangling references
 
 In contrast to a source transformation, the 150% model is compiled as a whole, so the compiler itself does not reject references to flavour-specific code that is removed. The verify tasks close this gap: they fail the build if any surviving class still references a removed class, field, method or enum constant.
