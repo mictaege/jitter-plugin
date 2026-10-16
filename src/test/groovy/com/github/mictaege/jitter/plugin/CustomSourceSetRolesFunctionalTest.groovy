@@ -252,7 +252,7 @@ class CustomSourceSetRolesFunctionalTest {
                 mavenCentral()
             }
             dependencies {
-                implementation 'io.github.mictaege:jitter-api:2026.3-rc4'
+                implementation 'io.github.mictaege:jitter-api:2026.3-rc5'
             }
             sourceSets {
                 sharedFixtures {
