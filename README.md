@@ -46,6 +46,28 @@ Until 2026.3 the flavour model was produced by transforming the Java sources wit
 
 </details>
 
+## Table of contents
+
+- [Problem](#problem)
+- [How it works](#how-it-works)
+- [Usage with Gradle](#usage-with-gradle)
+  - [Source set roles](#source-set-roles)
+  - [The active flavour in forked JVMs](#the-active-flavour-in-forked-jvms)
+  - [Task overview](#task-overview)
+  - [Output format](#output-format)
+  - [Verification of dangling references](#verification-of-dangling-references)
+  - [Dejittered source variant](#dejittered-source-variant)
+  - [Stale resources](#stale-resources)
+- [_jitter_ Source Code Markup](#jitter-source-code-markup)
+  - [_@OnlyIf_](#onlyif)
+  - [_@Fork_](#fork)
+  - [_@Alter_](#alter)
+- [_jitter_ Resource Handling](#jitter-resource-handling)
+  - [Making resources flavour specific](#making-resources-flavour-specific)
+  - [Inverted flavour declaration](#inverted-flavour-declaration)
+  - [Flavour gates in XML resources](#flavour-gates-in-xml-resources)
+- [Verification of critical terms](#verification-of-critical-terms)
+
 ## Problem
 
 A common problem in software development is that one application has to be adopted for different needs, e.g. the application has to be customized for different customers.
