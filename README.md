@@ -7,57 +7,11 @@
 
 A simple but complete example how _jitter_ works could be found at [eval.jitter](https://github.com/mictaege/eval.jitter). It's strongly recommended to check out this repository and to have also a closer look on the examples provided there.
 
-<details>
-<summary><b>Important notes!!! With release 2026.3 the Spoon source transformation is gone, jitter strips bytecode now</b></summary>
-
-## The transformation moved from sources to class files
-
-Until 2026.3 the flavour model was produced by transforming the Java sources with Spoon before compilation. 2026.3 compiles the complete 150% model untouched and removes the flavour-specific code from the compiled classes with bytecode analysis (ASM):
-
-- works with every language that compiles to JVM bytecode (Java, Kotlin, Groovy) and every javac syntax level - the stripper couples to the class file format, not the source syntax
-- the sources are never touched: line number tables of surviving code stay intact, hot code replacement works, the debugger resolves to the original sources
-- roughly half the build work of the source transformation, because nothing is recompiled after the flavouring
-
-## Breaking changes
-
-1. The 150% model must be self-consistent. The whole project must compile as one program, in every flavour. Inconsistent flavour usage that the per-flavour source transformation silently tolerated now fails the compile - deliberately: it was invisible inconsistency.
-2. Two-artifact design: downstream modules compile against the FULL model (classes directories / full jar) and run against the stripped artifacts (`jitterJar` replaces `runtimeElements`, `jitterTestFixturesJar` replaces `testFixturesRuntimeElements`). Consumers see the flavour model at runtime and the full model at compile time.
-3. `@Fork` and `@Alter` are strict now: a missing or inaccessible template fails the build. The source transformation logged the same problems and silently produced an empty flavour method - one long-masked real bug surfaced this way in our reference consumer.
-4. New verification: `jitterVerify` fails the build if surviving code references removed classes or members - within the module AND across module boundaries (removal manifests travel inside the stripped artifacts). javac switch map references to removed enum constants are tolerated as javac intends.
-5. The plain build (no flavour active) works again under Gradle 9.8.
-6. Spoon configuration is gone: the `compliance` property and all spoon task references are obsolete.
-
-## New
-
-- Source set roles DSL: `packagingSrcSets` (default `main`), `apiSrcSets` (default `testFixtures`), everything else test-like. Custom layouts are supported and validated (role overlap is an error, unknown names and unreachable stripped artifacts warn).
-- Scoped `jitterVerifyTestFixtures` / `jitterVerify<Name>` tasks: artifact tasks fail early on dangling references.
-- Stale resource report: resources whose owner class was removed ship anyway; the verify tasks report them as warnings.
-- Flavour switching without clean; all flavour-specific outputs are up-to-date checked, build-cache safe, and the verification reads removals from the cached manifests.
-- `dejitter<SrcSet>` tasks: the dejittered source variant of the active flavour - the original source minus the flavour specific code as source level surgery (comments, formatting and line numbers survive), with flavour processed resources and a removal cross check against the stripped model. For source deliveries; see below.
-- Kotlin sources dejitter like Java sources: `@OnlyIf` members, constructor parameters and enum entries, `@Fork` bodies, `@Alter` targets. The Kotlin parser resolves lazily from the repositories of the applying build and loads in an isolated classloader, so it never clashes with the Kotlin toolchain of the build.
-
-## Migration
-
-- Remove the `compliance` property and spoon task wiring from the build.
-- Critical term verification: retarget includes from `generated-sources/spoon/**` to `jitter-stripped/**`.
-- Expect clear `jitterVerify` errors where the old pipeline masked inconsistencies - they point at real flavour bugs.
-- Code in forked JVMs that needs the active flavour reads the system property `jitter.active.flavour`; pass it explicitly (see below).
-- [eval.jitter](https://github.com/mictaege/eval.jitter) demonstrates the complete feature set, including a library with a custom api source set.
-
-</details>
-
 ## Table of contents
 
 - [Problem](#problem)
+- [Getting started](#getting-started)
 - [How it works](#how-it-works)
-- [Usage with Gradle](#usage-with-gradle)
-  - [Source set roles](#source-set-roles)
-  - [The active flavour in forked JVMs](#the-active-flavour-in-forked-jvms)
-  - [Task overview](#task-overview)
-  - [Output format](#output-format)
-  - [Verification of dangling references](#verification-of-dangling-references)
-  - [Dejittered source variant](#dejittered-source-variant)
-  - [Stale resources](#stale-resources)
 - [_jitter_ Source Code Markup](#jitter-source-code-markup)
   - [_@OnlyIf_](#onlyif)
   - [_@Fork_](#fork)
@@ -66,7 +20,54 @@ Until 2026.3 the flavour model was produced by transforming the Java sources wit
   - [Making resources flavour specific](#making-resources-flavour-specific)
   - [Inverted flavour declaration](#inverted-flavour-declaration)
   - [Flavour gates in XML resources](#flavour-gates-in-xml-resources)
+- [Usage with Gradle](#usage-with-gradle)
+  - [Source set roles](#source-set-roles)
+  - [The active flavour in forked JVMs](#the-active-flavour-in-forked-jvms)
+  - [Task overview](#task-overview)
+  - [Output format](#output-format)
+  - [Verification of dangling references](#verification-of-dangling-references)
+  - [Dejittered source variant](#dejittered-source-variant)
+  - [Stale resources](#stale-resources)
 - [Verification of critical terms](#verification-of-critical-terms)
+
+> <details>
+> <summary><b>Important notes!!! With release 2026.3 the Spoon source transformation is gone, jitter strips bytecode now</b></summary>
+> 
+> ## The transformation moved from sources to class files
+> 
+> Until 2026.3 the flavour model was produced by transforming the Java sources with Spoon before compilation. 2026.3 compiles the complete 150% model untouched and removes the flavour-specific code from the compiled classes with bytecode analysis (ASM):
+> 
+> - works with every language that compiles to JVM bytecode (Java, Kotlin, Groovy) and every javac syntax level - the stripper couples to the class file format, not the source syntax
+> - the sources are never touched: line number tables of surviving code stay intact, hot code replacement works, the debugger resolves to the original sources
+> - roughly half the build work of the source transformation, because nothing is recompiled after the flavouring
+> 
+> ## Breaking changes
+> 
+> 1. The 150% model must be self-consistent. The whole project must compile as one program, in every flavour. Inconsistent flavour usage that the per-flavour source transformation silently tolerated now fails the compile - deliberately: it was invisible inconsistency.
+> 2. Two-artifact design: downstream modules compile against the FULL model (classes directories / full jar) and run against the stripped artifacts (`jitterJar` replaces `runtimeElements`, `jitterTestFixturesJar` replaces `testFixturesRuntimeElements`). Consumers see the flavour model at runtime and the full model at compile time.
+> 3. `@Fork` and `@Alter` are strict now: a missing or inaccessible template fails the build. The source transformation logged the same problems and silently produced an empty flavour method - one long-masked real bug surfaced this way in our reference consumer.
+> 4. New verification: `jitterVerify` fails the build if surviving code references removed classes or members - within the module AND across module boundaries (removal manifests travel inside the stripped artifacts). javac switch map references to removed enum constants are tolerated as javac intends.
+> 5. The plain build (no flavour active) works again under Gradle 9.8.
+> 6. Spoon configuration is gone: the `compliance` property and all spoon task references are obsolete.
+> 
+> ## New
+> 
+> - Source set roles DSL: `packagingSrcSets` (default `main`), `apiSrcSets` (default `testFixtures`), everything else test-like. Custom layouts are supported and validated (role overlap is an error, unknown names and unreachable stripped artifacts warn).
+> - Scoped `jitterVerifyTestFixtures` / `jitterVerify<Name>` tasks: artifact tasks fail early on dangling references.
+> - Stale resource report: resources whose owner class was removed ship anyway; the verify tasks report them as warnings.
+> - Flavour switching without clean; all flavour-specific outputs are up-to-date checked, build-cache safe, and the verification reads removals from the cached manifests.
+> - `dejitter<SrcSet>` tasks: the dejittered source variant of the active flavour - the original source minus the flavour specific code as source level surgery (comments, formatting and line numbers survive), with flavour processed resources and a removal cross check against the stripped model. For source deliveries; see below.
+> - Kotlin sources dejitter like Java sources: `@OnlyIf` members, constructor parameters and enum entries, `@Fork` bodies, `@Alter` targets. The Kotlin parser resolves lazily from the repositories of the applying build and loads in an isolated classloader, so it never clashes with the Kotlin toolchain of the build.
+> 
+> ## Migration
+> 
+> - Remove the `compliance` property and spoon task wiring from the build.
+> - Critical term verification: retarget includes from `generated-sources/spoon/**` to `jitter-stripped/**`.
+> - Expect clear `jitterVerify` errors where the old pipeline masked inconsistencies - they point at real flavour bugs.
+> - Code in forked JVMs that needs the active flavour reads the system property `jitter.active.flavour`; pass it explicitly (see below).
+> - [eval.jitter](https://github.com/mictaege/eval.jitter) demonstrates the complete feature set, including a library with a custom api source set.
+> 
+> </details>
 
 ## Problem
 
@@ -137,20 +138,7 @@ The benefits of the _jitter_ approach is that
 - conflicts and inconsistencies show up immediately at compile time
 - we can build distributions that are independent from further configurations and settings and absolutely identical to what runs in production
 
-## How it works
-
-The 150% model is compiled completely and untouched by the normal compiler - the whole project is a valid, consistent Java (and Kotlin, Groovy, ...) program in every flavour. After compilation _jitter_ removes the flavour-specific parts from the compiled classes:
-
-- Every source set gets a `jitterStrip<SrcSet>` task that runs after the compilation of its own source set and writes the stripped model to `build/jitter-stripped/<srcSet>` (the compiled classes stay untouched).
-- Compilation resolves against the full 150% model: other modules and downstream source sets compile against the compiled classes directories / the full jar (the compile artifacts), so every compile sees the complete model in every flavour.
-- Everything that ships or runs is stripped: the runtime artifacts (like `jitterJar`, which replaces the plain jar as the `runtimeElements` artifact) carry the flavour model - wars, test runtime and every other runtime consumer get the flavour variant. For the `war` task the classpath is wired to the stripped model as well. Which source sets expose their stripped model how is decided by the source set roles (see below): test-like source sets run against their stripped tree, packaging and api source sets get stripped runtime artifacts for their consumers.
-- The verify tasks check the stripped model for dangling references (see below).
-
-Because the stripping works on the class files, the source files and the line number tables of the surviving code are not touched at all - the debugger resolves to the original sources.
-
-The active flavour is a task input of the strip, verify, resource and jar tasks. Flavours can therefore be switched without a `clean`, the outputs are up-to-date checked and can be taken from the Gradle build cache.
-
-## Usage with Gradle
+## Getting started
 
 _jitter_ consists of two parts. First the _jitter-api_ which contains Java annotations like ```@OnlyIf``` that are used to mark up parts of the source code, second the _jitter-plugin_ which does the bytecode stripping. Through this separation your project will only have a dependency to the very small and lightweight _jitter-api_.
 
@@ -208,142 +196,18 @@ jitter {
 
 A complete example of a Gradle build using _jitter_ could be found in the [eval.jitter](https://github.com/mictaege/eval.jitter) example - including a library with a custom api source set and consumers of its stripped artifacts.
 
-### Source set roles
+## How it works
 
-Every source set carries one of three roles, which decide how its stripped model is exposed:
+The 150% model is compiled completely and untouched by the normal compiler - the whole project is a valid, consistent Java (and Kotlin, Groovy, ...) program in every flavour. After compilation _jitter_ removes the flavour-specific parts from the compiled classes:
 
-| Role | Default source sets | Semantics |
-|------|---------------------|-----------|
-| ```packaging``` | ```main``` | the stripped model is the module's runtime artifact: a stripped ```jitterJar``` replaces the outgoing runtime variant (```runtimeElements``` for ```main```, ```<name>RuntimeElements``` otherwise), the full classes stay the compile artifact |
-| ```api``` | ```testFixtures``` | like the standard test fixtures: the full classes stay the compile artifact (```<name>ApiElements```), a stripped ```jitter<Name>Jar``` replaces the outgoing ```<name>RuntimeElements``` variant for consumers and runtime |
-| test-like | everything else | the stripped tree is the source set's runtime identity - the source set output points at it, so test tasks and IDEs pick it up |
+- Every source set gets a `jitterStrip<SrcSet>` task that runs after the compilation of its own source set and writes the stripped model to `build/jitter-stripped/<srcSet>` (the compiled classes stay untouched).
+- Compilation resolves against the full 150% model: other modules and downstream source sets compile against the compiled classes directories / the full jar (the compile artifacts), so every compile sees the complete model in every flavour.
+- Everything that ships or runs is stripped: the runtime artifacts (like `jitterJar`, which replaces the plain jar as the `runtimeElements` artifact) carry the flavour model - wars, test runtime and every other runtime consumer get the flavour variant. For the `war` task the classpath is wired to the stripped model as well. Which source sets expose their stripped model how is decided by the source set roles (see below): test-like source sets run against their stripped tree, packaging and api source sets get stripped runtime artifacts for their consumers.
+- The verify tasks check the stripped model for dangling references (see below).
 
-The roles are configurable for projects with a custom source set layout:
+Because the stripping works on the class files, the source files and the line number tables of the surviving code are not touched at all - the debugger resolves to the original sources.
 
-```Groovy
-jitter {
-    packagingSrcSets = ['main']
-    apiSrcSets = ['testFixtures', 'sharedFixtures']
-}
-```
-
-A source set must not carry both roles. Names that are no source set of the project are ignored, like excluded source sets - a name that is neither a source set nor excluded nor one of the conventional defaults is most likely a typo and reported as a warning. An ```api``` or non-```main``` ```packaging``` source set without an outgoing ```<name>RuntimeElements``` configuration is reported as well: the stripped runtime artifact is built, but no consumer would resolve it. A custom ```api``` source set follows the same wiring conventions as the standard java-test-fixtures plugin (outgoing ```<name>ApiElements``` and ```<name>RuntimeElements``` variants, selected by the consumers by capability, like ```testFixtures(project(':lib'))``` does for the standard ones).
-
-Once _jitter_ is applied and the flavours of the application are configured the project now has an additional Gradle task for each configured flavour. In the example above these would be the tasks ```flavourCUSTOMER_A```, ```flavourCUSTOMER_B``` and ```flavourCUSTOMER_C```. These additional ```flavourXyz``` tasks are used to select the flavour which should be build or run.
-
-So for example if you like to build the _CUSTOMER_A_ flavour you have to type
-
-```Groovy
-gradle flavourCUSTOMER_A clean build
-```
-
-**Note** Since the stripped output is flavour specific but up-to-date checked, a `clean` is not required when switching flavours - the strip tasks will simply run again for the newly selected flavour.
-
-In order to verify the 150% model the ```flavourXyz``` could be omitted. E.g.:
-
-```Groovy
-gradle clean test
-```
-
-will execute all tests, even if a test is marked for a specific flavour. (Note that with no flavour active the classes are not stripped, so tests run against the full model.)
-
-It's also possible to select the flavour in a _gradle.properties_ file permanently
-
-```Properties
-systemProp.jitter.active.flavour=CUSTOMER_A
-```
-
-In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Such a permanently selected flavour in the _gradle.properties_ file will be overwritten by an explicit ```flavourXyz``` selection, so ```gradle flavourCUSTOMER_B clean build``` will build flavour _CUSTOMER_B_ even if flavour _CUSTOMER_A_ is defined in the _gradle.properties_ file.
-
-### The active flavour in forked JVMs
-
-Code that needs to know the active flavour at runtime reads the system property ```jitter.active.flavour``` (empty or absent means no flavour - the 150% model). With a ```systemProp.jitter.active.flavour``` entry in the _gradle.properties_ file, every forked JVM sees it. With a ```flavourXyz``` task selection it is not so simple: the property is set in the build JVM, but **forked test JVMs do not reliably inherit the build JVM's system properties** - reading it eagerly at configuration time can capture a stale value from a previous build in the same daemon. Pass it explicitly at execution time:
-
-```Groovy
-test {
-    doFirst {
-        systemProperty 'jitter.active.flavour', System.getProperty('jitter.active.flavour', '')
-    }
-}
-```
-
-The [eval.jitter](https://github.com/mictaege/eval.jitter) example shows the pattern in use.
-
-### Task overview
-
-| Task | Purpose |
-|------|---------|
-| ```flavourXyz``` | Selects the active flavour for this build |
-| ```jitterStrip<SrcSet>``` | Strips the compiled classes of the source set to the active flavour (into ```build/jitter-stripped/<srcSet>```) |
-| ```jitterVerifyMain``` | Scoped verify: checks only the stripped main tree for dangling references, so artifact tasks fail early |
-| ```jitterVerifyTestFixtures``` | Scoped verify of the stripped main + test fixtures trees (the content of the ```jitterTestFixturesJar``` artifact) |
-| ```jitterVerify``` | Aggregate verify: checks everything that ships or runs; every ```Test``` and ```JavaExec``` task depends on it |
-| ```jitterJar``` | The stripped runtime artifact of the main source set (classes + resources), replaces the plain jar in the runtime variant |
-| ```jitterTestFixturesJar``` | The stripped runtime artifact of the main and test fixtures source sets (generalized as ```jitter<Name>Jar``` for custom ```api``` source sets) |
-| ```dejitter<SrcSet>``` | The dejittered source variant of the source set (into ```build/jitter-dejittered/<srcSet>```), see below |
-| ```dejitter``` | The dejittered source variants of all source sets of the project: one task that depends on every ```dejitter<SrcSet>``` |
-| ```reportCriticalTerms``` / ```verifyCriticalTerms``` | Critical term verification, see below |
-
-### Output format
-
-Every line the plugin writes to the build log starts with the ```jitter: ``` prefix, so flavour output and build output of other plugins are distinguishable - in the terminal as well as in the log of a build server. The severity comes from the Gradle log level:
-
-- information: plain lifecycle output, visible by default, suppressed with ```-q```, e.g. ```jitter: Remove method com.zitecs.SomeClass#someMethod```
-- warning: rendered and counted as a build warning, e.g. ```jitter: resource X ships without its owner class Y (removed by the active flavour)```
-- error: fails the task, the failure message under *What went wrong* carries the prefix as well, e.g. ```jitter: the build contains references to flavour specific code that is not part of the active flavour```
-
-### Verification of dangling references
-
-In contrast to a source transformation, the 150% model is compiled as a whole, so the compiler itself does not reject references to flavour-specific code that is removed. The verify tasks close this gap: they fail the build if any surviving class still references a removed class, field, method or enum constant.
-
-The removals of the module's own stripping are known via the strip tasks. In addition, every stripped source set writes a removal manifest into the stripped tree (```META-INF/jitter/<srcSet>-removed.txt```), which travels inside the stripped runtime artifacts (```jitterJar```, ```jitterTestFixturesJar```). The verify tasks read the manifests of the flavour dependencies from the runtime classpath and check the surviving classes against them, so dangling references across module boundaries are caught as well - the check the source transformation got for free, because dependent modules were compiled against the already transformed sources.
-
-One construct is deliberately tolerated: javac's switch map classes (```Outer$N``` with a ```$SwitchMap$...``` field) GETSTATIC every enum constant of the switches of the source inside a ```NoSuchFieldError``` handler, so constants that a flavour dependency removed are tolerated at runtime by design - such references are not violations. Known constructs that are not resolved automatically are reported as clear build errors, e.g.
-
-- anonymous inner classes declared inside ```@OnlyIf``` methods
-- synthetic ```access$NNN``` accessor orphans
-- branchy field initializers (ternaries etc.) of removed fields
-
-### Dejittered source variant
-
-The ```dejitter<SrcSet>``` tasks create the source variant of the active flavour for source deliveries: the dejittered variant is the original source minus the flavour specific code, derived from the same annotations the bytecode stripping works on.
-
-The dejittering is a source level surgery: every edit removes or replaces an exact span of the original file, so comments, javadoc, formatting and line numbers of the untouched parts survive - the variant reads like authored source, not like decompiled code. The semantics mirror the stripping:
-
-- ```@OnlyIf``` removes classes, packages (the package-info together with all files of the package, regardless of their language), fields, constructors, methods and enum constants
-- ```@Fork``` replaces the gateway method's body with the template's body and removes the template method
-- ```@Alter``` replaces the target class with its template class; templates may live in the same source set or in another source set of the build (like the bytecode stripping, which resolves classpath templates)
-- the jitter annotations are removed from surviving elements, together with imports they leave behind
-
-The dejittering works for Java and Kotlin sources the same way - the Kotlin sources are parsed with the Kotlin compiler PSI, so the flavour constants of the annotation values resolve from the compile classpath like in Java. Other source files of the source directories (Groovy, ...) are copied as they are, dejittering those languages is out of scope.
-
-The output mirrors the source set layout: the dejittered sources under ```java``` and the flavour processed resources under ```resources```:
-
-```
-build/jitter-dejittered/main
-├── java
-└── resources
-```
-
-Annotation values may be compile time constants, like ```@OnlyIf(Flavour.MPK)``` - javac bakes them into the bytecode, the dejittering resolves them by reflecting the referenced constants class from the compile classpath of the source set.
-
-Every source level removal is cross checked against the removal manifest of the stripped model (the task runs after the strip task, so the manifest is fresh for the active flavour). The manifest may know more removals - annotation processors generate classes that have no source, package-infos are class nodes in the stripped model - but never less: a source level removal the bytecode stripping did not make fails the build, and the other direction fails it as well - a kept source file of a class the stripping removed (like a Kotlin file whose package is only gated by the Java package-info) leaks flavour specific code into the delivery. The two pipelines cannot drift apart silently.
-
-The plugin does not compile the variant itself. A delivery build that needs the compilability guarantee wires it up like this:
-
-```groovy
-def dejitteredMain = tasks.named('dejitterMain')
-def compileDejitteredMain = tasks.register('compileDejitteredMain', JavaCompile) {
-    source = fileTree("$buildDir/jitter-dejittered/main/java")
-    classpath = sourceSets.main.compileClasspath
-    destinationDirectory = file("$buildDir/jitter-dejittered-compiled/main")
-    dependsOn dejitteredMain
-}
-```
-
-### Stale resources
-
-A resource whose owner class has been removed by the active flavour still ships: flavour specific resources usually follow the flavour suffix convention and are dropped by the resource processing, but an unsuffixed resource of a gated class is no longer reachable through the classpath. The verify tasks report such resources as warnings (```resource X ships without its owner class Y```) - candidates for review, not necessarily errors.
+The active flavour is a task input of the strip, verify, resource and jar tasks. Flavours can therefore be switched without a `clean`, the outputs are up-to-date checked and can be taken from the Gradle build cache.
 
 ## _jitter_ Source Code Markup
 
@@ -583,6 +447,145 @@ XML-ish resources (```xsd```, ```xjb```, ```xsl```, ```xslt```, ```wsdl```, ```x
 ```
 
 The mechanism is generic: it does not depend on any particular XML vocabulary, and the gate never renames a resource - unlike the flavour suffix convention it expresses presence or absence only. Files without a gate pass through unchanged. Note that xjc generation directives (```<annox:annotatePackage>@...OnlyIf(...)</annox:annotatePackage>``` and other ```annox:``` elements) are deliberately not resource gates: they belong to the generated class model, and a schema whose generated classes are flavour-gated can still be a runtime dependency of surviving code - e.g. as the ```xsd:import``` source of base types used by flavour-specific message schemas that validate against it.
+
+## Usage with Gradle
+
+### Source set roles
+
+Every source set carries one of three roles, which decide how its stripped model is exposed:
+
+| Role | Default source sets | Semantics |
+|------|---------------------|-----------|
+| ```packaging``` | ```main``` | the stripped model is the module's runtime artifact: a stripped ```jitterJar``` replaces the outgoing runtime variant (```runtimeElements``` for ```main```, ```<name>RuntimeElements``` otherwise), the full classes stay the compile artifact |
+| ```api``` | ```testFixtures``` | like the standard test fixtures: the full classes stay the compile artifact (```<name>ApiElements```), a stripped ```jitter<Name>Jar``` replaces the outgoing ```<name>RuntimeElements``` variant for consumers and runtime |
+| test-like | everything else | the stripped tree is the source set's runtime identity - the source set output points at it, so test tasks and IDEs pick it up |
+
+The roles are configurable for projects with a custom source set layout:
+
+```Groovy
+jitter {
+    packagingSrcSets = ['main']
+    apiSrcSets = ['testFixtures', 'sharedFixtures']
+}
+```
+
+A source set must not carry both roles. Names that are no source set of the project are ignored, like excluded source sets - a name that is neither a source set nor excluded nor one of the conventional defaults is most likely a typo and reported as a warning. An ```api``` or non-```main``` ```packaging``` source set without an outgoing ```<name>RuntimeElements``` configuration is reported as well: the stripped runtime artifact is built, but no consumer would resolve it. A custom ```api``` source set follows the same wiring conventions as the standard java-test-fixtures plugin (outgoing ```<name>ApiElements``` and ```<name>RuntimeElements``` variants, selected by the consumers by capability, like ```testFixtures(project(':lib'))``` does for the standard ones).
+
+Once _jitter_ is applied and the flavours of the application are configured the project now has an additional Gradle task for each configured flavour. In the example above these would be the tasks ```flavourCUSTOMER_A```, ```flavourCUSTOMER_B``` and ```flavourCUSTOMER_C```. These additional ```flavourXyz``` tasks are used to select the flavour which should be build or run.
+
+So for example if you like to build the _CUSTOMER_A_ flavour you have to type
+
+```Groovy
+gradle flavourCUSTOMER_A clean build
+```
+
+**Note** Since the stripped output is flavour specific but up-to-date checked, a `clean` is not required when switching flavours - the strip tasks will simply run again for the newly selected flavour.
+
+In order to verify the 150% model the ```flavourXyz``` could be omitted. E.g.:
+
+```Groovy
+gradle clean test
+```
+
+will execute all tests, even if a test is marked for a specific flavour. (Note that with no flavour active the classes are not stripped, so tests run against the full model.)
+
+It's also possible to select the flavour in a _gradle.properties_ file permanently
+
+```Properties
+systemProp.jitter.active.flavour=CUSTOMER_A
+```
+
+In this case ```gradle clean build``` will always build flavour _CUSTOMER_A_. Such a permanently selected flavour in the _gradle.properties_ file will be overwritten by an explicit ```flavourXyz``` selection, so ```gradle flavourCUSTOMER_B clean build``` will build flavour _CUSTOMER_B_ even if flavour _CUSTOMER_A_ is defined in the _gradle.properties_ file.
+
+### The active flavour in forked JVMs
+
+Code that needs to know the active flavour at runtime reads the system property ```jitter.active.flavour``` (empty or absent means no flavour - the 150% model). With a ```systemProp.jitter.active.flavour``` entry in the _gradle.properties_ file, every forked JVM sees it. With a ```flavourXyz``` task selection it is not so simple: the property is set in the build JVM, but **forked test JVMs do not reliably inherit the build JVM's system properties** - reading it eagerly at configuration time can capture a stale value from a previous build in the same daemon. Pass it explicitly at execution time:
+
+```Groovy
+test {
+    doFirst {
+        systemProperty 'jitter.active.flavour', System.getProperty('jitter.active.flavour', '')
+    }
+}
+```
+
+The [eval.jitter](https://github.com/mictaege/eval.jitter) example shows the pattern in use.
+
+### Task overview
+
+| Task | Purpose |
+|------|---------|
+| ```flavourXyz``` | Selects the active flavour for this build |
+| ```jitterStrip<SrcSet>``` | Strips the compiled classes of the source set to the active flavour (into ```build/jitter-stripped/<srcSet>```) |
+| ```jitterVerifyMain``` | Scoped verify: checks only the stripped main tree for dangling references, so artifact tasks fail early |
+| ```jitterVerifyTestFixtures``` | Scoped verify of the stripped main + test fixtures trees (the content of the ```jitterTestFixturesJar``` artifact) |
+| ```jitterVerify``` | Aggregate verify: checks everything that ships or runs; every ```Test``` and ```JavaExec``` task depends on it |
+| ```jitterJar``` | The stripped runtime artifact of the main source set (classes + resources), replaces the plain jar in the runtime variant |
+| ```jitterTestFixturesJar``` | The stripped runtime artifact of the main and test fixtures source sets (generalized as ```jitter<Name>Jar``` for custom ```api``` source sets) |
+| ```dejitter<SrcSet>``` | The dejittered source variant of the source set (into ```build/jitter-dejittered/<srcSet>```), see below |
+| ```dejitter``` | The dejittered source variants of all source sets of the project: one task that depends on every ```dejitter<SrcSet>``` |
+| ```reportCriticalTerms``` / ```verifyCriticalTerms``` | Critical term verification, see below |
+
+### Output format
+
+Every line the plugin writes to the build log starts with the ```jitter: ``` prefix, so flavour output and build output of other plugins are distinguishable - in the terminal as well as in the log of a build server. The severity comes from the Gradle log level:
+
+- information: plain lifecycle output, visible by default, suppressed with ```-q```, e.g. ```jitter: Remove method com.zitecs.SomeClass#someMethod```
+- warning: rendered and counted as a build warning, e.g. ```jitter: resource X ships without its owner class Y (removed by the active flavour)```
+- error: fails the task, the failure message under *What went wrong* carries the prefix as well, e.g. ```jitter: the build contains references to flavour specific code that is not part of the active flavour```
+
+### Verification of dangling references
+
+In contrast to a source transformation, the 150% model is compiled as a whole, so the compiler itself does not reject references to flavour-specific code that is removed. The verify tasks close this gap: they fail the build if any surviving class still references a removed class, field, method or enum constant.
+
+The removals of the module's own stripping are known via the strip tasks. In addition, every stripped source set writes a removal manifest into the stripped tree (```META-INF/jitter/<srcSet>-removed.txt```), which travels inside the stripped runtime artifacts (```jitterJar```, ```jitterTestFixturesJar```). The verify tasks read the manifests of the flavour dependencies from the runtime classpath and check the surviving classes against them, so dangling references across module boundaries are caught as well - the check the source transformation got for free, because dependent modules were compiled against the already transformed sources.
+
+One construct is deliberately tolerated: javac's switch map classes (```Outer$N``` with a ```$SwitchMap$...``` field) GETSTATIC every enum constant of the switches of the source inside a ```NoSuchFieldError``` handler, so constants that a flavour dependency removed are tolerated at runtime by design - such references are not violations. Known constructs that are not resolved automatically are reported as clear build errors, e.g.
+
+- anonymous inner classes declared inside ```@OnlyIf``` methods
+- synthetic ```access$NNN``` accessor orphans
+- branchy field initializers (ternaries etc.) of removed fields
+
+### Dejittered source variant
+
+The ```dejitter<SrcSet>``` tasks create the source variant of the active flavour for source deliveries: the dejittered variant is the original source minus the flavour specific code, derived from the same annotations the bytecode stripping works on.
+
+The dejittering is a source level surgery: every edit removes or replaces an exact span of the original file, so comments, javadoc, formatting and line numbers of the untouched parts survive - the variant reads like authored source, not like decompiled code. The semantics mirror the stripping:
+
+- ```@OnlyIf``` removes classes, packages (the package-info together with all files of the package, regardless of their language), fields, constructors, methods and enum constants
+- ```@Fork``` replaces the gateway method's body with the template's body and removes the template method
+- ```@Alter``` replaces the target class with its template class; templates may live in the same source set or in another source set of the build (like the bytecode stripping, which resolves classpath templates)
+- the jitter annotations are removed from surviving elements, together with imports they leave behind
+
+The dejittering works for Java and Kotlin sources the same way - the Kotlin sources are parsed with the Kotlin compiler PSI, so the flavour constants of the annotation values resolve from the compile classpath like in Java. Other source files of the source directories (Groovy, ...) are copied as they are, dejittering those languages is out of scope.
+
+The output mirrors the source set layout: the dejittered sources under ```java``` and the flavour processed resources under ```resources```:
+
+```
+build/jitter-dejittered/main
+├── java
+└── resources
+```
+
+Annotation values may be compile time constants, like ```@OnlyIf(Flavour.MPK)``` - javac bakes them into the bytecode, the dejittering resolves them by reflecting the referenced constants class from the compile classpath of the source set.
+
+Every source level removal is cross checked against the removal manifest of the stripped model (the task runs after the strip task, so the manifest is fresh for the active flavour). The manifest may know more removals - annotation processors generate classes that have no source, package-infos are class nodes in the stripped model - but never less: a source level removal the bytecode stripping did not make fails the build, and the other direction fails it as well - a kept source file of a class the stripping removed (like a Kotlin file whose package is only gated by the Java package-info) leaks flavour specific code into the delivery. The two pipelines cannot drift apart silently.
+
+The plugin does not compile the variant itself. A delivery build that needs the compilability guarantee wires it up like this:
+
+```groovy
+def dejitteredMain = tasks.named('dejitterMain')
+def compileDejitteredMain = tasks.register('compileDejitteredMain', JavaCompile) {
+    source = fileTree("$buildDir/jitter-dejittered/main/java")
+    classpath = sourceSets.main.compileClasspath
+    destinationDirectory = file("$buildDir/jitter-dejittered-compiled/main")
+    dependsOn dejitteredMain
+}
+```
+
+### Stale resources
+
+A resource whose owner class has been removed by the active flavour still ships: flavour specific resources usually follow the flavour suffix convention and are dropped by the resource processing, but an unsuffixed resource of a gated class is no longer reachable through the classpath. The verify tasks report such resources as warnings (```resource X ships without its owner class Y```) - candidates for review, not necessarily errors.
 
 ## Verification of critical terms
 
