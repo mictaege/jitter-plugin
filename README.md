@@ -412,6 +412,23 @@ public final class PersonValidator extends AbstractValidator<Person> implements 
 }
 ```
 
+#### Flavour-variant compile-time constants
+
+Because the flavour model is produced *after* compilation, javac compiles every class against the full 150%
+model and inlines ```static final``` constants of primitive or ```String``` type into the using method bodies
+at compile time. If an ```@Alter``` target or its templates define flavour-variant primitive constants, the
+using code therefore still carries the 150% values after stripping, no matter what the swapped constant
+class contains. _jitter_ re-bakes inlined constants inside annotations (e.g. ```@Table(name = SomeConstants.XYZ)```)
+automatically, but it cannot re-bake them in method bodies, because a plain integer literal in a body is
+indistinguishable from an inlined constant.
+
+Flavour-variant compile-time constants are therefore only safe if they are
+
+- used exclusively in annotations (re-baked automatically),
+- identical across all flavours, or
+- made non-inlinable, e.g. by boxing them: ```static final Integer SOME_IDX = 4;``` - javac does not
+  inline boxed constants, so the stripped code reads them from the swapped class at runtime.
+
 ## _jitter_ Resource Handling
 
 ### Making resources flavour specific
