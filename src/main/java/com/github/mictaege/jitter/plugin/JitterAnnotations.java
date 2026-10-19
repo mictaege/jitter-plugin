@@ -22,8 +22,10 @@ final class JitterAnnotations {
     private static final String GATEWAY = "Lcom/github/mictaege/jitter/api/Gateway;";
     private static final String ALTER = "Lcom/github/mictaege/jitter/api/Alter;";
     private static final String ALTERNATIVES = "Lcom/github/mictaege/jitter/api/Alternatives;";
+    private static final String INLINED_CONSTANT =
+            "Lcom/github/mictaege/jitter/api/InlinedConstantApproved;";
     private static final List<String> ALL = Arrays.asList(
-            ONLY_IF, FORK, GATEWAY, ALTER, ALTERNATIVES);
+            ONLY_IF, FORK, GATEWAY, ALTER, ALTERNATIVES, INLINED_CONSTANT);
 
     private JitterAnnotations() {
         super();
@@ -50,6 +52,23 @@ final class JitterAnnotations {
         return flavours != null && flavours.stream().noneMatch(JitterUtil::active);
     }
 
+    /**
+     * Whether the given annotations carry the {@code @InlinedConstantApproved}
+     * marker - the assertion that the inlined usages of a flavour-gated
+     * constant variable are flavour-consistent.
+     */
+    static boolean isInlinedConstantApproved(final List<AnnotationNode> annotations) {
+        if (annotations == null) {
+            return false;
+        }
+        for (final AnnotationNode annotation : annotations) {
+            if (INLINED_CONSTANT.equals(annotation.desc)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static AnnotationNode matchingAnnotation(final List<AnnotationNode> annotations,
                                              final String desc, final String containerDesc,
                                              final String expectedValue) {
@@ -74,6 +93,17 @@ final class JitterAnnotations {
 
     static AnnotationNode alterTarget(final List<AnnotationNode> annotations) {
         return matchingAnnotation(annotations, ALTER, ALTERNATIVES, "with");
+    }
+
+    /**
+     * All {@code @Alter} annotations of the given class, including the
+     * inactive flavours - unlike {@link #alterTarget}, which only returns
+     * the one matching the active flavour.
+     */
+    static List<AnnotationNode> alterAnnotations(final List<AnnotationNode> annotations) {
+        return annotations == null
+                ? new ArrayList<>()
+                : repeatableAnnotations(annotations, ALTER, ALTERNATIVES);
     }
 
     @SuppressWarnings("unchecked")
