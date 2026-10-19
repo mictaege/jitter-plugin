@@ -57,6 +57,13 @@ class JitterStripTask extends DefaultTask {
     @Classpath
     FileCollection templateClasspath
 
+    /**
+     * The names of all flavours of the project: the constant audit tells a
+     * flavour-variant @OnlyIf gate from a gate that covers all flavours.
+     */
+    @Input
+    List<String> flavourNames = []
+
     @Internal
     StripResult stripResult = new StripResult()
 
@@ -83,8 +90,8 @@ class JitterStripTask extends DefaultTask {
         // unit: a mixed Java/Kotlin source set spreads package gates,
         // classes and cross references over several of them
         def result = outputDir == null
-                ? stripper.strip(sourceDirs, null, templateClasspathFiles)
-                : stripper.strip(sourceDirs, outputDir.toPath(), templateClasspathFiles)
+                ? stripper.strip(sourceDirs, null, templateClasspathFiles, flavourNames)
+                : stripper.strip(sourceDirs, outputDir.toPath(), templateClasspathFiles, flavourNames)
         stripResult.merge(result)
         // one output format for everything the plugin says: every line is
         // prefixed with 'jitter: ', the severity comes from the log level -

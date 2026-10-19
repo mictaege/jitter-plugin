@@ -32,13 +32,26 @@ final class StripContext {
     final List<File> templateClasspath;
 
     /**
+     * The names of all flavours of the project, the configuration the
+     * {@code @OnlyIf} gates refer to. The constant audit uses them to tell
+     * a flavour-variant gate (does not cover all flavours: the constant is
+     * missing in at least one flavour) from a gate that covers everything.
+     */
+    final List<String> flavours;
+
+    /**
      * The lambda implementations removed together with their owners, by owner
      * internal name - the input of the {@code $deserializeLambda$} cleanup.
      */
     final Map<String, List<String[]>> removedLambdas = new HashMap<>();
 
     StripContext(final List<File> templateClasspath) {
+        this(templateClasspath, java.util.Collections.emptyList());
+    }
+
+    StripContext(final List<File> templateClasspath, final List<String> flavours) {
         this.templateClasspath = templateClasspath;
+        this.flavours = flavours;
     }
 
 }

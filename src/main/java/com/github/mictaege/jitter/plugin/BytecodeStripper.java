@@ -65,6 +65,12 @@ public final class BytecodeStripper {
         return strip(java.util.Collections.singletonList(sourceDir), targetDir, templateClasspath);
     }
 
+    public StripResult strip(final List<Path> sourceDirs, final Path targetDir,
+                             final List<java.io.File> templateClasspath)
+            throws IOException {
+        return strip(sourceDirs, targetDir, templateClasspath, java.util.Collections.emptyList());
+    }
+
     /**
      * Strips all class files of the given source directories as ONE unit
      * and reports what has been removed. A source set of a mixed Java/Kotlin
@@ -74,15 +80,24 @@ public final class BytecodeStripper {
      * together - a per-directory strip would not see the gates of the
      * others. With a target directory the sources stay untouched (see
      * above); without one every source is stripped in place.
+     *
+     * <p>The {@code flavours} are the names of all flavours of the project:
+     * the constant audit tells a flavour-variant {@code @OnlyIf} gate
+     * (fails the build, whatever flavour is active, unless the constant is
+     * marked {@code @InlinedConstantApproved}) from a gate that covers all flavours
+     * (harmless).
      */
     public StripResult strip(final List<Path> sourceDirs, final Path targetDir,
-                             final List<java.io.File> templateClasspath)
+                             final List<java.io.File> templateClasspath,
+                             final List<String> flavours)
             throws IOException {
-        final StripContext ctx = new StripContext(templateClasspath);
+        final StripContext ctx = new StripContext(templateClasspath, flavours);
 
         for (final Path dir : sourceDirs) {
             ClassIndex.loadClasses(dir, ctx.nodes, ctx.paths, ctx.result);
         }
+
+        ConstantAuditor.audit(ctx);
 
         PackageRemover.remove(ctx);
         final Map<String, String> constantReplacements = AlterApplier.applyAltclasses(ctx);

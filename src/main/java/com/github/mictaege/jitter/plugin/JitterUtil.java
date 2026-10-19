@@ -9,6 +9,7 @@ import org.gradle.api.logging.Logging;
 final class JitterUtil {
 
     static final String FLAVOUR_PROP = "jitter.active.flavour";
+    static final String VERIFY_INLINED_CONSTANTS_PROP = "jitter.verifyInlinedConstants";
     static final String GROUP = "jitter";
     static final String DEJITTERED_DIR = "jitter-dejittered";
     /**
@@ -34,6 +35,18 @@ final class JitterUtil {
         return ofNullable(getProperty(FLAVOUR_PROP))
                 .map(p -> p.length() > 0 )
                 .orElse(false);
+    }
+
+    /**
+     * Whether the source level verification of the {@code @InlinedConstantApproved}
+     * usages runs as part of the build. The check parses all sources, so
+     * it is deliberately opt-in: off in the everyday build - the marker is
+     * the review decision - and on for those who want the usages verified
+     * mechanically, e.g. on the build server. The check tasks stay
+     * invocable directly whatever the flag says.
+     */
+    static boolean verifyInlinedConstants() {
+        return Boolean.parseBoolean(getProperty(VERIFY_INLINED_CONSTANTS_PROP));
     }
 
     static Logger log() {

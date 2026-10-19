@@ -412,6 +412,37 @@ public final class PersonValidator extends AbstractValidator<Person> implements 
 }
 ```
 
+#### Flavour-variant compile-time constants
+
+Because the flavour model is produced *after* compilation, javac compiles every class against the full 150% model and inlines constant variables - ```final``` fields of a primitive or ```String``` type with a constant initializer, static or instance - into the using code as plain literals. If such a constant is flavour-variant, the stripped code therefore keeps the full model value, and no reference remains that the stripping or the reference verification could see. The constant audit therefore fails the build - in every flavour run and in the full model, whatever flavour is active - for every constant variable whose existence is flavour variant:
+
+- gated by an ```@OnlyIf``` gate on the field that does not cover all flavours
+- declared in a class whose ```@OnlyIf``` gate does not cover all flavours
+- declared in a package whose ```@OnlyIf``` gate does not cover all flavours (direct classes of the package)
+
+and for a constant of an ```@Alter``` target whose value differs from a template's constant of the same name - the usage sites keep the full model value instead of following the flavour swap.
+
+The rule for a user is one sentence: *review every flavour-variant constant and mark it with ```@InlinedConstantApproved```, or make it non-inlinable* (box it: ```static final Integer SOME_IDX = 4;``` - or drop ```final```, in which case the usages stay references that the stripping verifies):
+
+```Java
+@OnlyIf(Flavour.BMX)
+@InlinedConstantApproved
+public static final String CARRIER = "carrier";
+```
+
+For a differing constant of an ```@Alter``` target, the same marker asserts that all its usages are annotations - their values are re-baked to the active flavour - or consistently gated members.
+
+The marker is meaningless on non-constant or non-flavour-variant fields and fails the build there as well, so it keeps exactly one meaning: *the usages of this constant are reviewed and flavour consistent*.
+
+Since javac has inlined the usages, no bytecode based check can verify them. The mechanical verification of the marker is therefore a source level check - ```jitterVerifyInlinedConstants<SrcSet>``` parses the sources and fails the build when a usage of a marked constant is kept in a flavour where the constant is removed (a member's gate must be a subset of the constant's flavours; for an ```@Alter``` constant the usage must sit inside an annotation). Because parsing all sources costs noticeable build time, the check is deliberately opt-in - off in the everyday build, where the marker is the review decision:
+
+```Groovy
+// gradle.properties, on for the build server
+systemProp.jitter.verifyInlinedConstants=true
+```
+
+The check tasks stay invocable directly whatever the flag says, and the aggregate ```jitterVerifyInlinedConstants``` task runs them all in one go. The check parses the Java sources and the Kotlin sources alike: the Kotlin usage check walks the Kotlin PSI of the source set, so companion members, top level constants and imports of constants verify like their Java counterparts (the Kotlin parser resolves lazily from the repositories of the applying build and loads in an isolated classloader, so it never clashes with the Kotlin toolchain of the build). Known gaps, also in Java: usages via reflection, and top level constants of other files used without import. Usages via reflection are beyond the check and need manual attention.
+
 ## _jitter_ Resource Handling
 
 ### Making resources flavour specific

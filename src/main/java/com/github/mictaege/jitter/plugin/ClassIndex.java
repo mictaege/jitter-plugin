@@ -64,39 +64,78 @@ final class ClassIndex {
      */
     static ClassNode loadFromClasspath(final List<File> classpath, final String internalName,
                                         final StripResult result) {
+        final File entry = entryOf(classpath, internalName);
+        if (entry == null) {
+            return null;
+        }
+        try {
+            final byte[] bytes = readFromEntry(entry, internalName);
+            if (bytes == null) {
+                return null;
+            }
+            final ClassNode node = new ClassNode();
+            new ClassReader(bytes).accept(node, 0);
+            return node;
+        } catch (final IOException e) {
+            result.warn("Could not read " + internalName + " from classpath entry "
+                    + entry + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * The first classpath entry that contains the given class, or null -
+     * for lookups that must stay within the declaring artifact, like the
+     * package gate of a class in a split package.
+     */
+    static File entryOf(final List<File> classpath, final String internalName) {
         if (classpath == null) {
             return null;
         }
         for (final File entry : classpath) {
             try {
-                final byte[] bytes;
                 if (entry.isDirectory()) {
                     final Path file = entry.toPath().resolve(
                             internalName.replace('/', File.separatorChar) + ".class");
-                    if (!Files.isRegularFile(file)) {
-                        continue;
+                    if (Files.isRegularFile(file)) {
+                        return entry;
                     }
-                    bytes = Files.readAllBytes(file);
                 } else {
                     try (final ZipFile zip = new ZipFile(entry)) {
-                        final ZipEntry e = zip.getEntry(internalName + ".class");
-                        if (e == null) {
-                            continue;
-                        }
-                        try (final InputStream in = zip.getInputStream(e)) {
-                            bytes = in.readAllBytes();
+                        if (zip.getEntry(internalName + ".class") != null) {
+                            return entry;
                         }
                     }
                 }
-                final ClassNode node = new ClassNode();
-                new ClassReader(bytes).accept(node, 0);
-                return node;
             } catch (final IOException e) {
-                result.warn("Could not read " + internalName + " from classpath entry " + entry + ": "
-                        + e.getMessage());
+                // unreadable entries are skipped, like in loadFromClasspath
             }
         }
         return null;
+    }
+
+    /**
+     * The bytecode of the given class from one specific classpath entry,
+     * or null if the entry does not contain it.
+     */
+    static byte[] readFromEntry(final File entry, final String internalName) throws IOException {
+        if (entry.isDirectory()) {
+            final Path file = entry.toPath().resolve(
+                    internalName.replace('/', File.separatorChar) + ".class");
+            if (!Files.isRegularFile(file)) {
+                return null;
+            }
+            return Files.readAllBytes(file);
+        }
+        try (final ZipFile zip = new ZipFile(entry)) {
+            final ZipEntry e = zip.getEntry(internalName + ".class");
+            if (e == null) {
+                return null;
+            }
+            try (final InputStream in = zip.getInputStream(e)) {
+                return in.readAllBytes();
+            }
+        }
     }
 
 }
