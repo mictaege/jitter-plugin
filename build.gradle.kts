@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.github.mictaege"
-version = "2026.3-rc5"
+version = "2026.3-rc6"
 
 gradlePlugin {
     website.set("https://github.com/mictaege/jitter-plugin")
@@ -38,7 +38,7 @@ repositories {
 
 dependencies {
     implementation(gradleApi())
-    implementation("io.github.mictaege:jitter-api:2026.3-rc5")
+    implementation("io.github.mictaege:jitter-api:2026.3-rc6")
     implementation("com.google.guava:guava:33.4.8-jre")
     implementation("org.ow2.asm:asm:9.10.1")
     implementation("org.ow2.asm:asm-commons:9.10.1")
