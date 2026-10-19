@@ -320,6 +320,15 @@ class JitterPlugin implements Plugin<Project>  {
                 verifyTask.dependencyClasspath = manifestClasspath
                 verifyTask.dependsOn stripTasks
 
+                // the tests run against the stripped flavour model of their
+                // source sets - the aggregate verify must have checked that
+                // model before anything executes: without this dependency,
+                // dangling references of test-like source sets surface only
+                // when the aggregate task runs on demand, not in the test run
+                project.tasks.withType(Test).configureEach { testTask ->
+                    testTask.dependsOn verifyTask
+                }
+
                 // the source level verification of the @InlinedConstantApproved
                 // usages parses all sources, so it is deliberately opt-in:
                 // off in the everyday build (the marker is the review

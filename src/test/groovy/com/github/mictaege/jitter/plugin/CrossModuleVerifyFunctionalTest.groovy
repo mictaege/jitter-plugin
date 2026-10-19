@@ -334,6 +334,68 @@ class CrossModuleVerifyFunctionalTest {
         assertThat(result.getOutput(), not(containsString('ships without its owner class')))
     }
 
+    @Test
+    void shouldFailTheTestRunOnDanglingReferencesOfTheTestSourceSet() {
+        // the class fixture's AppFixture dangles as well (its own scenario);
+        // a clean fixture lets the test source set be the only violator
+        write('app/src/testFixtures/java/app/AppFixture.java', """
+            package app;
+
+            import lib.Greeter;
+
+            public class AppFixture {
+
+                public String welcome() {
+                    return new Greeter().greet();
+                }
+            }
+        """)
+        write('app/src/test/java/app/AppTest.java', """
+            package app;
+
+            import lib.Greeter;
+            import org.junit.jupiter.api.Test;
+
+            public class AppTest {
+
+                @Test
+                void usesRemovedProducerCode() {
+                    new Greeter().greetB();
+                }
+            }
+        """)
+        write('app/build.gradle', """
+            plugins {
+                id 'java'
+                id 'io.github.mictaege.jitter-plugin'
+                id 'java-test-fixtures'
+            }
+            repositories {
+                mavenCentral()
+            }
+            dependencies {
+                implementation project(':lib')
+                testFixturesImplementation project(':lib')
+                testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+                testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+            }
+            jitter {
+                flavour { name = 'A' }
+                flavour { name = 'B' }
+            }
+            tasks.withType(Test).configureEach {
+                useJUnitPlatform()
+            }
+        """)
+
+        // the test source set references producer code that flavour A
+        // removes: the test run must fail on the verify before the tests
+        // execute against a broken model
+        def result = runAndFail('flavourA', ':app:test')
+
+        assertThat(result.getOutput(), containsString('app.AppTest calls removed method lib.Greeter#greetB'))
+    }
+
     private BuildResult run(String... args) {
         GradleRunner.create()
                 .withProjectDir(prj.toFile())
