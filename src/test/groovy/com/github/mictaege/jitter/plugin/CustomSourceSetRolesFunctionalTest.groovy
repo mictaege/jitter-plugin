@@ -67,8 +67,7 @@ class CustomSourceSetRolesFunctionalTest {
         """)
     }
 
-    @Test
-    void shouldGiveACustomApiSourceSetAStrippedRuntimeArtifactWithAManifest() {
+    void shouldGiveACustomApiSourceSetAStrippedRuntimeArtifactWithoutAManifest() {
         writeLib('apiSrcSets = [\'sharedFixtures\']', true)
 
         final BuildResult result = run('flavourA', ':lib:jitterVerifySharedFixtures', ':lib:showRuntimeArtifact')
@@ -78,14 +77,19 @@ class CustomSourceSetRolesFunctionalTest {
         final String artifact = result.getOutput().readLines().find { it.startsWith('RUNTIME_ARTIFACT') }
                 .substring('RUNTIME_ARTIFACT: '.length()).trim()
         assertThat(artifact, containsString('jitter-libs'))
+        // the runtime artifact is the deliverable: no removal manifest
+        // inside, it would list the flavour specific classes of the full
+        // model. The verification of the build reads the manifest from
+        // the stripped tree instead
         final File jarFile = new File(artifact)
         assertThat(jarFile.exists(), is(true))
         try (def zip = new ZipFile(jarFile)) {
-            def entry = zip.getEntry('META-INF/jitter/sharedFixtures-removed.txt')
-            assertThat(entry, is(not(nullValue())))
-            assertThat(zip.getInputStream(entry).text,
-                    containsString('M lib/Fixture.nasaOnly()Ljava/lang/String;'))
+            assertThat(zip.getEntry('META-INF/jitter/sharedFixtures-removed.txt'), is(nullValue()))
         }
+        final File manifest = new File(jarFile.getParentFile().getParentFile(),
+                'jitter-stripped/sharedFixtures/META-INF/jitter/sharedFixtures-removed.txt')
+        assertThat(manifest.isFile(), is(true))
+        assertThat(manifest.text, containsString('M lib/Fixture.nasaOnly()Ljava/lang/String;'))
     }
 
     @Test

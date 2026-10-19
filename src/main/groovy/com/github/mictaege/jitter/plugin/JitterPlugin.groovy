@@ -196,7 +196,12 @@ class JitterPlugin implements Plugin<Project>  {
                             org.gradle.api.tasks.bundling.Jar) {
                         group = JitterUtil.GROUP
                         destinationDirectory = new File(project.buildDir, 'jitter-libs')
-                        from(p.strip.outputDir)
+                        // no removal manifest in the deliverable: it lists the
+                        // flavour specific classes of the full model - the
+                        // verification reads it from the stripped tree instead
+                        from(p.strip.outputDir) {
+                            exclude 'META-INF/jitter/**'
+                        }
                         from(p.srcSet.output.resourcesDir)
                         dependsOn p.strip, project.tasks.named(p.srcSet.processResourcesTaskName)
                     }
@@ -219,8 +224,19 @@ class JitterPlugin implements Plugin<Project>  {
                     if (p.name == 'main') {
                         def warTask = project.tasks.findByName('war')
                         if (warTask != null) {
-                            warTask.classpath = project.files(p.strip.outputDir, p.srcSet.output.resourcesDir,
+                            // the stripped classes are their own copy spec
+                            // under WEB-INF/classes, not a plain classpath
+                            // entry: only a scoped source allows the
+                            // removal manifest to be excluded - the
+                            // deliverable must not carry it, it lists the
+                            // flavour specific classes of the full model
+                            warTask.classpath = project.files(p.srcSet.output.resourcesDir,
                                     project.configurations.runtimeClasspath)
+                            warTask.webInf.into('classes') {
+                                from(p.strip.outputDir) {
+                                    exclude 'META-INF/jitter/**'
+                                }
+                            }
                             warTask.dependsOn verify
                         }
                     }
@@ -266,9 +282,15 @@ class JitterPlugin implements Plugin<Project>  {
                         group = JitterUtil.GROUP
                         destinationDirectory = new File(project.buildDir, 'jitter-libs')
                         // the trees may carry the same package-info;
-                        // first (packaging) wins, like the old jar
+                        // first (packaging) wins, like the old jar. No
+                        // removal manifests in the deliverable - see the
+                        // stripped runtime jar above
                         duplicatesStrategy = org.gradle.api.file.DuplicatesStrategy.EXCLUDE
-                        contentStrips.each { s -> from(s.outputDir) }
+                        contentStrips.each { s ->
+                            from(s.outputDir) {
+                                exclude 'META-INF/jitter/**'
+                            }
+                        }
                         contentSrcSets.each { s -> from(s.output.resourcesDir) }
                         dependsOn contentStrips
                     }

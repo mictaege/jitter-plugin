@@ -16,10 +16,13 @@ import java.io.IOException
  * guarantee that conflicts and inconsistencies show up at build time.
  *
  * The removals of the own stripping come via the strip tasks. In addition the
- * manifests of the flavour dependencies are read from the dependency classpath,
- * so dangling references across module boundaries are caught as well - the
- * check the source transformation got for free, because dependent modules were
- * compiled against the already transformed sources.
+ * manifests of the flavour dependencies are read, so dangling references
+ * across module boundaries are caught as well - the check the source
+ * transformation got for free, because dependent modules were compiled
+ * against the already transformed sources. Classpath trees carry their
+ * manifest as before, and the manifests of dependent projects of the same
+ * build are read from their stripped trees: the jars of the build carry no
+ * manifest anymore, because they are the deliverables.
  */
 @DisableCachingByDefault(because = "the verification is a build check over the stripped model and should always run")
 class JitterVerifyTask extends DefaultTask {
@@ -79,6 +82,7 @@ class JitterVerifyTask extends DefaultTask {
                 throw new GradleException("jitter: could not read the flavour removal manifest of ${file}", e)
             }
         }
+        readSiblingManifests(removedClasses, removedMembers)
 
         def violations = ReferenceVerifier.findDanglingReferences(allClassesDirs, removedClasses, removedMembers)
 
@@ -92,6 +96,50 @@ class JitterVerifyTask extends DefaultTask {
                             + violations.join("\n  "))
         }
         reportStaleResources(removedClasses)
+    }
+
+    /**
+     * The removal manifests of the dependent projects of this build: their
+     * stripped jars carry no manifest anymore - the jars are the
+     * deliverables - so the manifest of every project whose stripped jar is
+     * on the dependency classpath is read from its stripped tree directly.
+     * Derived at execution time like the template index of the dejittering,
+     * so that every project of the build is evaluated. External stripped
+     * artifacts have no manifest; like any non jitter dependency they
+     * simply contribute no removals.
+     */
+    private void readSiblingManifests(final Set<String> removedClasses,
+                                      final Set<String> removedMembers) {
+        if (dependencyClasspath == null) {
+            return
+        }
+        final def classpathFiles = dependencyClasspath.files
+        project.rootProject.allprojects { p ->
+            p.plugins.withId('java') {
+                p.sourceSets.all { ss ->
+                    final def fullJar = p.tasks.findByName(
+                            ss.name == 'main' ? 'jar' : "${ss.name}Jar")
+                    if (fullJar == null || !fullJar.hasProperty('archiveFileName')) {
+                        return
+                    }
+                    final def strippedJar = new File(p.buildDir,
+                            "jitter-libs/${fullJar.archiveFileName.get()}")
+                    if (classpathFiles.contains(strippedJar)) {
+                        final def manifest = new File(p.buildDir,
+                                "jitter-stripped/${ss.name}/META-INF/jitter/${ss.name}-removed.txt")
+                        if (manifest.isFile()) {
+                            try {
+                                RemovalManifest.readFile(manifest, removedClasses, removedMembers)
+                            } catch (IOException e) {
+                                throw new GradleException(
+                                        "jitter: could not read the removal manifest of the"
+                                                + " stripped ${ss.name} model of ${p.name}", e)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**

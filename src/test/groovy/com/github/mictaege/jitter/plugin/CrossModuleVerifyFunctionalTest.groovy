@@ -117,18 +117,24 @@ class CrossModuleVerifyFunctionalTest {
     }
 
     @Test
-    void shouldWriteTheRemovalManifestIntoTheStrippedJar() {
+    void shouldKeepTheRemovalManifestOutOfTheStrippedJar() {
         run('flavourA', ':lib:jitterJar')
 
+        // the jar is the deliverable: it must not carry the removal
+        // manifest, which lists the flavour specific classes of the full
+        // model
         def jarFile = prj.resolve('lib/build/jitter-libs/lib.jar').toFile()
         assertThat(jarFile.exists(), is(true))
         try (def zip = new ZipFile(jarFile)) {
-            def entry = zip.getEntry('META-INF/jitter/main-removed.txt')
-            assertThat(entry, is(not(null)))
-            def manifest = zip.getInputStream(entry).text
-            assertThat(manifest, containsString('M lib/Greeter.greetB()Ljava/lang/String;'))
-            assertThat(manifest, not(containsString('greet()')))
+            assertThat(zip.getEntry('META-INF/jitter/main-removed.txt'), is(nullValue()))
         }
+        // the stripped tree keeps the manifest: the verification of the
+        // build reads it there
+        def manifest = prj.resolve(
+                'lib/build/jitter-stripped/main/META-INF/jitter/main-removed.txt').toFile()
+        assertThat(manifest.isFile(), is(true))
+        assertThat(manifest.text, containsString('M lib/Greeter.greetB()Ljava/lang/String;'))
+        assertThat(manifest.text, not(containsString('greet()')))
     }
 
     @Test
