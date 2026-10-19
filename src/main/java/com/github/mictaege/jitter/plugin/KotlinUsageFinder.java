@@ -112,6 +112,7 @@ public final class KotlinUsageFinder implements AutoCloseable {
     private static final class PropDecl {
         private List<String> gate;
         private boolean marked;
+        private boolean alterConst;
     }
 
     private static final class PendingGate {
@@ -364,6 +365,9 @@ public final class KotlinUsageFinder implements AutoCloseable {
         final PropDecl decl = new PropDecl();
         pending(decl, onlyIfOf(prop), ctx);
         decl.marked = annotationOf(prop, "InlinedConstantApproved") != null;
+        // a constant with @AlterConstValue has a flavour variant value, so
+        // like an @Alter target it verifies as annotation-only
+        decl.alterConst = annotationOf(prop, "AlterConstValue") != null;
         if (prop.getName() != null) {
             owner.props.put(prop.getName(), decl);
         }
@@ -606,7 +610,7 @@ public final class KotlinUsageFinder implements AutoCloseable {
                 return null;
             }
             List<String> gate = prop.gate;
-            boolean alterTarget = false;
+            boolean alterTarget = prop.alterConst;
             for (TypeDecl enclosing = own; enclosing != null;
                     enclosing = enclosingOfType(enclosing)) {
                 gate = intersect(gate, enclosing.gate);
@@ -654,7 +658,8 @@ public final class KotlinUsageFinder implements AutoCloseable {
                 gate = intersect(gate, externalPackageGate(node));
                 return new Resolved(gate,
                         JitterAnnotations.isInlinedConstantApproved(f.visibleAnnotations),
-                        !JitterAnnotations.alterAnnotations(node.visibleAnnotations).isEmpty());
+                        !JitterAnnotations.alterAnnotations(node.visibleAnnotations).isEmpty()
+                        || !JitterAnnotations.alterConstValues(f.visibleAnnotations).isEmpty());
             }
         }
         return null;

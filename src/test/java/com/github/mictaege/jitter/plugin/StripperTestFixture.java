@@ -49,6 +49,15 @@ abstract class StripperTestFixture {
     }
 
     final Path compile(final String... nameAndSourcePairs) throws IOException {
+        return compile(null, nameAndSourcePairs);
+    }
+
+    /**
+     * Compiles the fixture sources with an additional classpath entry, for
+     * fixtures that compile against a previously compiled dependency.
+     */
+    final Path compile(final Path extraClasspath, final String... nameAndSourcePairs)
+            throws IOException {
         if (nameAndSourcePairs.length % 2 != 0) {
             throw new IllegalArgumentException("expected name/source pairs");
         }
@@ -68,7 +77,8 @@ abstract class StripperTestFixture {
         }
         final List<String> options = new java.util.ArrayList<>();
         options.add("-cp");
-        options.add(System.getProperty("java.class.path"));
+        options.add(System.getProperty("java.class.path")
+                + (extraClasspath == null ? "" : ":" + extraClasspath));
         options.add("-d");
         options.add(classes.toString());
         options.addAll(javaFiles);

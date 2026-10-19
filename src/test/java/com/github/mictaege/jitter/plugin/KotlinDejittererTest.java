@@ -267,6 +267,34 @@ public class KotlinDejittererTest {
         assertThat(result.getRemovedClasses().isEmpty(), is(true));
     }
 
+    @Test
+    void flattensAlterConstValuesToTheActiveFlavour() throws Exception {
+        write("com/example/TableNames.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValue\n"
+                + "import com.github.mictaege.jitter.api.InlinedConstantApproved\n"
+                + "class TableNames {\n"
+                + "  companion object {\n"
+                + "    @AlterConstValue(ifActive = \"Esa\", with = \"ESA_JOB\")\n"
+                + "    @AlterConstValue(ifActive = \"Nasa\", with = \"NASA_JOB\")\n"
+                + "    @InlinedConstantApproved\n"
+                + "    const val JOB: String = \"com.example.TableNames.JOB\"\n"
+                + "    @AlterConstValue(ifActive = [\"Esa\", \"Nasa\"], with = \"42\")\n"
+                + "    val LIMIT: Int = 4\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("com/example/TableNames.kt");
+        assertThat(text, containsString("const val JOB: String = \"ESA_JOB\""));
+        assertThat(text, containsString("val LIMIT: Int = 42"));
+        assertThat(text, not(containsString("AlterConstValue")));
+        assertThat(text, not(containsString("NASA_JOB")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
     // ------------------------------------------------------------ fixture
 
     private StripResult dejitter(final String flavour) throws IOException {

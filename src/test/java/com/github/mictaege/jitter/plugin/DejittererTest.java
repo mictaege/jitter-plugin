@@ -571,6 +571,49 @@ public class DejittererTest {
         assertThat(result.getErrors().get(0), containsString("alternative classes of other source sets"));
     }
 
+    @Test
+    void flattensAlterConstValuesToTheActiveFlavour() throws Exception {
+        write("com/example/TableNames.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValue;\n"
+                + "import com.github.mictaege.jitter.api.InlinedConstantApproved;\n"
+                + "public class TableNames {\n"
+                + "  @AlterConstValue(ifActive = \"Esa\", with = \"ESA_JOB\")\n"
+                + "  @AlterConstValue(ifActive = \"Nasa\", with = \"NASA_JOB\")\n"
+                + "  @InlinedConstantApproved\n"
+                + "  public static final String JOB = \"com.example.TableNames.JOB\";\n"
+                + "  @AlterConstValue(ifActive = {\"Esa\", \"Nasa\"}, with = \"42\")\n"
+                + "  public static final Integer LIMIT = 4;\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("com/example/TableNames.java");
+        assertThat(text, containsString("public static final String JOB = \"ESA_JOB\";"));
+        assertThat(text, containsString("public static final Integer LIMIT = 42;"));
+        assertThat(text, not(containsString("AlterConstValue")));
+        assertThat(text, not(containsString("NASA_JOB")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
+    void keepsAlterConstValuesOfTheFullModelUntouched() throws Exception {
+        write("com/example/TableNames.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValue;\n"
+                + "public class TableNames {\n"
+                + "  @AlterConstValue(ifActive = \"Esa\", with = \"ESA_JOB\")\n"
+                + "  public static final String JOB = \"com.example.TableNames.JOB\";\n"
+                + "}\n");
+
+        final StripResult result = dejitter("");
+
+        final String text = read("com/example/TableNames.java");
+        assertThat(text, containsString("\"com.example.TableNames.JOB\""));
+        assertThat(text, not(containsString("AlterConstValue")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
     // ------------------------------------------------------------ fixture
 
     private StripResult dejitter(final String flavour) throws IOException {

@@ -628,30 +628,32 @@ public class BytecodeStripperTest {
     }
 
     @Test
-    void rebakesInlinedAnnotationConstantsOfAlteredConstantsClasses() throws Exception {
+    void rebakesThePlaceholdersOfAlterConstValueConstants() throws Exception {
         final Path classes = compile(
-                "test/TableNames.java",
+                "test/TableRef.java",
                 "package test;\n"
-                        + "import com.github.mictaege.jitter.api.Alter;\n"
                         + "import java.lang.annotation.Retention;\n"
                         + "import java.lang.annotation.RetentionPolicy;\n"
                         + "@Retention(RetentionPolicy.RUNTIME)\n"
-                        + "@interface TableRef { String name(); }\n"
-                        + "@Retention(RetentionPolicy.RUNTIME)\n"
-                        + "@interface ColumnRefs { String[] names(); }\n"
-                        + "@Alter(with = \"TableNamesEsa\", ifActive = \"ESA\")\n"
-                        + "public class TableNames {\n"
-                        + "  public static final String JOB = \"TableNames.JOB\";\n"
-                        + "  public static final String TELE = \"TableNames.TELE\";\n"
-                        + "  public static final String DUP_A = \"ambiguous\";\n"
-                        + "  public static final String DUP_B = \"ambiguous\";\n"
-                        + "}\n",
-                "test/TableNamesEsa.java",
+                        + "@interface TableRef { String name(); }\n",
+                "test/ColumnRefs.java",
                 "package test;\n"
-                        + "public class TableNamesEsa {\n"
-                        + "  public static final String JOB = \"ESA_JOB\";\n"
-                        + "  public static final String TELE = \"ESA_TELE\";\n"
-                        + "  public static final String DUP_A = \"ESA_DUP_A\";\n"
+                        + "import java.lang.annotation.Retention;\n"
+                        + "import java.lang.annotation.RetentionPolicy;\n"
+                        + "@Retention(RetentionPolicy.RUNTIME)\n"
+                        + "@interface ColumnRefs { String[] names(); }\n",
+                "test/TableNames.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.AlterConstValue;\n"
+                        + "import com.github.mictaege.jitter.api.InlinedConstantApproved;\n"
+                        + "public class TableNames {\n"
+                        + "  @AlterConstValue(ifActive = \"ESA\", with = \"ESA_JOB\")\n"
+                        + "  @AlterConstValue(ifActive = \"NASA\", with = \"NASA_JOB\")\n"
+                        + "  @InlinedConstantApproved\n"
+                        + "  public static final String JOB = \"test.TableNames.JOB\";\n"
+                        + "  @AlterConstValue(ifActive = {\"ESA\", \"NASA\"}, with = \"ESA_TELE\")\n"
+                        + "  @InlinedConstantApproved\n"
+                        + "  public static final String TELE = \"test.TableNames.TELE\";\n"
                         + "}\n",
                 "test/JobEntity.java",
                 "package test;\n"
@@ -660,8 +662,6 @@ public class BytecodeStripperTest {
                         + "  public Object field;\n"
                         + "  @ColumnRefs(names = {TableNames.JOB, TableNames.TELE})\n"
                         + "  public Object other;\n"
-                        + "  @TableRef(name = TableNames.DUP_A)\n"
-                        + "  public Object ambiguous;\n"
                         + "}\n");
 
         new BytecodeStripper().strip(classes);
@@ -674,9 +674,13 @@ public class BytecodeStripperTest {
                 .filter(f -> f.name.equals("other")).findFirst().get().visibleAnnotations.get(0);
         assertThat(columnsRef.values.get(1),
                 is((Object) java.util.Arrays.asList("ESA_JOB", "ESA_TELE")));
-        final org.objectweb.asm.tree.AnnotationNode ambiguousRef = entity.fields.stream()
-                .filter(f -> f.name.equals("ambiguous")).findFirst().get().visibleAnnotations.get(0);
-        assertThat(ambiguousRef.values.get(1), is((Object) "ambiguous"));
+        // the declaring constant itself carries the flavour value as well
+        final ClassNode names = read(classes, "test/TableNames");
+        final org.objectweb.asm.tree.FieldNode job = names.fields.stream()
+                .filter(f -> f.name.equals("JOB")).findFirst().get();
+        assertThat(job.value, is("ESA_JOB"));
+        // and the flavour annotations are stripped from the model
+        assertThat(job.visibleAnnotations, is(nullValue()));
     }
 
     @Test

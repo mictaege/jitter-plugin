@@ -133,6 +133,7 @@ final class InlinedConstantsChecker {
     private static final class FieldDecl {
         List<String> gate;
         boolean marked;
+        boolean alterConst;
         String value;
     }
 
@@ -242,6 +243,10 @@ final class InlinedConstantsChecker {
             final FieldDecl info = new FieldDecl();
             pendingGates.add(new PendingGate(info, field.getAnnotations(), ctx, null));
             info.marked = isMarked(field.getAnnotations());
+            // a constant with @AlterConstValue has a flavour variant value,
+            // so like an @Alter target it verifies as annotation-only
+            info.alterConst = field.getAnnotations().stream()
+                    .anyMatch(a -> a.getNameAsString().endsWith("AlterConstValue"));
             for (final VariableDeclarator var : field.getVariables()) {
                 decl.fields.put(var.getNameAsString(), info);
                 final Expression initializer = var.getInitializer().orElse(null);
@@ -537,7 +542,7 @@ final class InlinedConstantsChecker {
                 }
                 result.gate = intersect(effective, packageGates.get(own.pkg));
                 result.marked = decl.marked;
-                result.alterTarget = own.alterTarget;
+                result.alterTarget = own.alterTarget || decl.alterConst;
                 return result;
             }
             return null;
@@ -567,7 +572,8 @@ final class InlinedConstantsChecker {
                 result.gate = intersect(effective, externalPackageGate(node));
                 result.marked = JitterAnnotations.isInlinedConstantApproved(f.visibleAnnotations);
                 result.alterTarget =
-                        !JitterAnnotations.alterAnnotations(node.visibleAnnotations).isEmpty();
+                        !JitterAnnotations.alterAnnotations(node.visibleAnnotations).isEmpty()
+                        || !JitterAnnotations.alterConstValues(f.visibleAnnotations).isEmpty();
                 return result;
             }
         }

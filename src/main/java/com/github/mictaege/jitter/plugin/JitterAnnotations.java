@@ -22,10 +22,15 @@ final class JitterAnnotations {
     private static final String GATEWAY = "Lcom/github/mictaege/jitter/api/Gateway;";
     private static final String ALTER = "Lcom/github/mictaege/jitter/api/Alter;";
     private static final String ALTERNATIVES = "Lcom/github/mictaege/jitter/api/Alternatives;";
+    private static final String ALTER_CONST_VALUE =
+            "Lcom/github/mictaege/jitter/api/AlterConstValue;";
+    private static final String ALTER_CONST_VALUES =
+            "Lcom/github/mictaege/jitter/api/AlterConstValues;";
     private static final String INLINED_CONSTANT =
             "Lcom/github/mictaege/jitter/api/InlinedConstantApproved;";
     private static final List<String> ALL = Arrays.asList(
-            ONLY_IF, FORK, GATEWAY, ALTER, ALTERNATIVES, INLINED_CONSTANT);
+            ONLY_IF, FORK, GATEWAY, ALTER, ALTERNATIVES,
+            ALTER_CONST_VALUE, ALTER_CONST_VALUES, INLINED_CONSTANT);
 
     private JitterAnnotations() {
         super();
@@ -104,6 +109,17 @@ final class JitterAnnotations {
         return annotations == null
                 ? new ArrayList<>()
                 : repeatableAnnotations(annotations, ALTER, ALTERNATIVES);
+    }
+
+    /**
+     * All {@code @AlterConstValue} annotations of the given field, all
+     * flavour groups - the declaration of the constant's flavour specific
+     * values.
+     */
+    static List<AnnotationNode> alterConstValues(final List<AnnotationNode> annotations) {
+        return annotations == null
+                ? new ArrayList<>()
+                : repeatableAnnotations(annotations, ALTER_CONST_VALUE, ALTER_CONST_VALUES);
     }
 
     @SuppressWarnings("unchecked")

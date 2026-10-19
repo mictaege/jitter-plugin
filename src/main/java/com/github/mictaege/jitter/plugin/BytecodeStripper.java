@@ -100,17 +100,21 @@ public final class BytecodeStripper {
         ConstantAuditor.audit(ctx);
 
         PackageRemover.remove(ctx);
-        final Map<String, String> constantReplacements = AlterApplier.applyAltclasses(ctx);
-        AlterApplier.rebakeAnnotationConstants(ctx, constantReplacements);
+        AlterApplier.applyAltclasses(ctx);
         ForkApplier.applyForkMethods(ctx);
         EnumRewriter.rewriteEnums(ctx);
         OnlyIfRemover.removeOnlyIf(ctx);
         OnlyIfRemover.restoreDefaultConstructors(ctx);
         InitializerRemover.removeFieldInitializers(ctx);
+        // the flavour specific constant values, after the removals so
+        // that only the constants visible in the active flavour are patched
+        AlterConstApplier.apply(ctx);
         SyntheticSweeper.cleanDeserializeLambda(ctx);
         SyntheticSweeper.removeOrphanedSynthetics(ctx);
         SyntheticSweeper.cleanSwitchMaps(ctx);
         SyntheticSweeper.cleanNestAttributes(ctx);
+        // the paranoia scan: no placeholder anchor survives in the code
+        AlterConstApplier.verifyNoPlaceholdersLeft(ctx);
         AnnotationCleaner.clean(ctx);
 
         ClassFileWriter.writeBack(sourceDirs, targetDir, ctx);

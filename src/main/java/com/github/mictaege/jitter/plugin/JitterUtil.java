@@ -31,6 +31,15 @@ final class JitterUtil {
                 .orElse(true);
     }
 
+    /**
+     * The active flavour as configured, empty for the full model - the
+     * raw property, unlike {@link #active(String)}, which matches
+     * against it.
+     */
+    static String activeFlavour() {
+        return ofNullable(getProperty(FLAVOUR_PROP)).orElse("");
+    }
+
     static boolean anyFlavour() {
         return ofNullable(getProperty(FLAVOUR_PROP))
                 .map(p -> p.length() > 0 )

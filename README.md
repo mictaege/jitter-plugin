@@ -371,6 +371,8 @@ The template classes - here ```PersonValidatorA```, ```PersonValidatorB``` and `
 
 During replacement only the package, the simple name and the class visibility of the target class are transferred to the template class. All other parts of the class are resulting from the template class. The template class itself is removed from the stripped model - it does not leak into the output - and the swapped class keeps the template's `SourceFile` attribute, so the debugger resolves it to the template's source file.
 
+An ```@Alter``` class must not hold static constant variables: javac has inlined their values into the usage sites outside the class, so those baked-in values would not follow the swap - the constant audit fails the build. Declare the flavour variance of a constant's *value* with ```@AlterConstValue``` on the constant itself instead (see the compile-time constants section below).
+
 Example:
 
 ```Java
@@ -420,21 +422,45 @@ Because the flavour model is produced *after* compilation, javac compiles every 
 - declared in a class whose ```@OnlyIf``` gate does not cover all flavours
 - declared in a package whose ```@OnlyIf``` gate does not cover all flavours (direct classes of the package)
 
-and for a constant of an ```@Alter``` target whose value differs from a template's constant of the same name - the usage sites keep the full model value instead of following the flavour swap.
+and for every constant whose *value* is flavour variant, which is declared with ```@AlterConstValue``` on the constant itself - not, as before, by swapping a whole constants class with ```@Alter```, which fails the build now: javac has inlined the target's values into the usage sites, so they would not follow the swap.
 
 The rule for a user is one sentence: *review every flavour-variant constant and mark it with ```@InlinedConstantApproved```, or make it non-inlinable* (box it: ```static final Integer SOME_IDX = 4;``` - or drop ```final```, in which case the usages stay references that the stripping verifies):
 
 ```Java
-@OnlyIf(Flavour.BMX)
+@OnlyIf(Flavour.CUSTOMER_A)
 @InlinedConstantApproved
 public static final String CARRIER = "carrier";
 ```
 
-For a differing constant of an ```@Alter``` target, the same marker asserts that all its usages are annotations - their values are re-baked to the active flavour - or consistently gated members.
-
 The marker is meaningless on non-constant or non-flavour-variant fields and fails the build there as well, so it keeps exactly one meaning: *the usages of this constant are reviewed and flavour consistent*.
 
-Since javac has inlined the usages, no bytecode based check can verify them. The mechanical verification of the marker is therefore a source level check - ```jitterVerifyInlinedConstants<SrcSet>``` parses the sources and fails the build when a usage of a marked constant is kept in a flavour where the constant is removed (a member's gate must be a subset of the constant's flavours; for an ```@Alter``` constant the usage must sit inside an annotation). Because parsing all sources costs noticeable build time, the check is deliberately opt-in - off in the everyday build, where the marker is the review decision:
+#### Flavour-variant constant values with @AlterConstValue
+
+When the *value* of a constant differs per flavour, ```@AlterConstValue``` declares the flavours' values right on the constant - an ```@Alter``` of a whole constants class must not be used for that anymore (and fails the build if it holds static constants):
+
+```Java
+public class MyDbTableNames {
+
+    @AlterConstValue(ifActive = Flavour.CUSTOMER_A, with = "CUSTOMER_A_TABLE")
+    @AlterConstValue(ifActive = Flavour.CUSTOMER_B, with = "CUSTOMER_B_TABLE")
+    @InlinedConstantApproved
+    public static final String CUSTOMER_TABLE =
+            "myproject.MyDbTableNames.CUSTOMER_TABLE";
+
+    @AlterConstValue(ifActive = {Flavour.CUSTOMER_A, Flavour.CUSTOMER_B}, with = "3000")
+    @AlterConstValue(ifActive = Flavour.CUSTOMER_C, with = "10000")
+    public static final Integer MAX_RESULTS = 3000;
+}
+```
+
+The build enforces the rules mechanically:
+
+- String constants are inlined into their usage sites, so their full model value must be the *placeholder anchor* - the fully qualified name of the constant itself. The anchor is unique by construction and names the declaring class, so the flavour build re-bakes it to the active flavour's value wherever it was inlined: annotation values of any module of the build, resolved from the compile classpath, and the declaration itself. Because only annotations are re-baked, String constants with ```@AlterConstValue``` also need ```@InlinedConstantApproved``` - their usages must sit inside annotations (a body usage fails the build with a ```jitterVerify``` error: the anchor would leak into the code).
+- Non-String constants must be non-inlinable: a wrapper type (```Integer```, ```Boolean```, ...), or a non-constant static field (Kotlin: ```val``` instead of ```const val```). Nothing is inlined then - the usages are references that follow the flavour at runtime - and the flavour build patches the single folded literal assignment in the declaring class's ```<clinit>```. Anything computed fails the build with a clear error. The ```@InlinedConstantApproved``` marker is forbidden here: nothing can leak.
+- The ```@AlterConstValue``` instances must cover every flavour in which the constant is visible - its ```@OnlyIf``` gates intersected with the class and package gates - and must not name flavours where it is not visible.
+- The dejittered source variant flattens the mechanism: the constant's initializer becomes the active flavour's value (with the correct type), and the ```@AlterConstValue``` annotations disappear with the other jitter annotations.
+
+Since javac has inlined the usages, no bytecode based check can verify them. The mechanical verification of the marker is therefore a source level check - ```jitterVerifyInlinedConstants<SrcSet>``` parses the sources and fails the build when a usage of a marked constant is kept in a flavour where the constant is removed (a member's gate must be a subset of the constant's flavours; for a flavour-altered constant - ```@Alter``` target or ```@AlterConstValue``` - the usage must sit inside an annotation). Because parsing all sources costs noticeable build time, the check is deliberately opt-in - off in the everyday build, where the marker is the review decision:
 
 ```Groovy
 // gradle.properties, on for the build server
@@ -598,7 +624,7 @@ build/jitter-dejittered/main
 └── resources
 ```
 
-Annotation values may be compile time constants, like ```@OnlyIf(Flavour.MPK)``` - javac bakes them into the bytecode, the dejittering resolves them by reflecting the referenced constants class from the compile classpath of the source set.
+Annotation values may be compile time constants, like ```@OnlyIf(Flavour.CUSTOMER_A)``` - javac bakes them into the bytecode, the dejittering resolves them by reflecting the referenced constants class from the compile classpath of the source set.
 
 Every source level removal is cross checked against the removal manifest of the stripped model (the task runs after the strip task, so the manifest is fresh for the active flavour). The manifest may know more removals - annotation processors generate classes that have no source, package-infos are class nodes in the stripped model - but never less: a source level removal the bytecode stripping did not make fails the build, and the other direction fails it as well - a kept source file of a class the stripping removed (like a Kotlin file whose package is only gated by the Java package-info) leaks flavour specific code into the delivery. The two pipelines cannot drift apart silently.
 

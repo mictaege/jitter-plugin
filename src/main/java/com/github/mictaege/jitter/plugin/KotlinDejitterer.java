@@ -67,7 +67,8 @@ import java.util.regex.Pattern;
 public final class KotlinDejitterer implements KotlinDejitter {
 
     private static final Set<String> JITTER_ANNOS = Set.of(
-            "OnlyIf", "Fork", "Gateway", "Alter", "Alternatives");
+            "OnlyIf", "Fork", "Gateway", "Alter", "Alternatives",
+            "AlterConstValue", "AlterConstValues");
     private static final String JITTER_API_IMPORT = "com.github.mictaege.jitter.api.";
 
     /**
@@ -256,6 +257,9 @@ public final class KotlinDejitterer implements KotlinDejitter {
                     applyAlter((KtClassOrObject) decl, alter, internalPrefix, ctx);
                     continue;
                 }
+            }
+            if (decl instanceof KtProperty) {
+                applyAlterConstValues((KtProperty) decl, ctx);
             }
             cleanJitterAnnotations(decl, ctx);
             if (decl instanceof KtClassOrObject) {
@@ -647,6 +651,101 @@ public final class KotlinDejitterer implements KotlinDejitter {
         final List<String> out = new ArrayList<>();
         collectValues(ctx, expr, out);
         return out.isEmpty() ? expr.getText() : out.get(0);
+    }
+
+    /**
+     * Replaces the initializer of an {@code @AlterConstValue} property
+     * with the active flavour's value: the dejittered model is the source
+     * of the active flavour alone, so the flavour value declarations are
+     * flattened into the constant they vary. The annotations themselves
+     * are removed together with the other jitter annotations.
+     */
+    private void applyAlterConstValues(final KtProperty prop, final FileCtx ctx) {
+        if (activeFlavour.isEmpty()) {
+            return;
+        }
+        String with = null;
+        for (final KtAnnotationEntry annotation : prop.getAnnotationEntries()) {
+            if ("AlterConstValue".equals(annotationName(annotation))
+                    && ifActiveValues(ctx, annotation).stream().anyMatch(this::active)) {
+                with = argValue(ctx, annotation, "with");
+                break;
+            }
+        }
+        if (with == null) {
+            return;
+        }
+        final String literal = kotlinLiteralOf(prop, with, ctx);
+        if (literal == null) {
+            return;
+        }
+        final KtExpression initializer = prop.getInitializer();
+        if (initializer != null) {
+            ctx.edits.replace(initializer.getTextRange().getStartOffset(),
+                    initializer.getTextRange().getEndOffset(), literal);
+            ctx.result.info("Set the @AlterConstValue of " + prop.getName());
+        }
+    }
+
+    /**
+     * The flavours of the {@code ifActive} array of an
+     * {@code @AlterConstValue} annotation - positionally first or named.
+     */
+    private List<String> ifActiveValues(final FileCtx ctx, final KtAnnotationEntry annotation) {
+        final List<String> out = new ArrayList<>();
+        if (annotation.getValueArgumentList() == null) {
+            return out;
+        }
+        final List<KtValueArgument> args = annotation.getValueArgumentList().getArguments();
+        for (int i = 0; i < args.size(); i++) {
+            final KtValueArgument arg = args.get(i);
+            final KtValueArgumentName argName = arg.getArgumentName();
+            final boolean isIfActive = argName != null
+                    ? "ifActive".equals(argName.getAsName().getIdentifier())
+                    : i == 0;
+            if (isIfActive) {
+                collectValues(ctx, arg.getArgumentExpression(), out);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The Kotlin source literal of the active flavour's value for the
+     * property's declared type, or null when the type is unsupported or
+     * undeclared.
+     */
+    private String kotlinLiteralOf(final KtProperty prop, final String with, final FileCtx ctx) {
+        if (prop.getTypeReference() == null) {
+            ctx.result.error("The @AlterConstValue property " + prop.getName() + " of "
+                    + ctx.file.getFileName() + " needs an explicit type - the flavour"
+                    + " value cannot replace an inferred initializer");
+            return null;
+        }
+        final String type = prop.getTypeReference().getText();
+        switch (type) {
+            case "String":
+                return "\"" + with.replace("\\", "\\\\").replace("\"", "\\\"")
+                        .replace("$", "\\$") + "\"";
+            case "Boolean":
+                return Boolean.parseBoolean(with) ? "true" : "false";
+            case "Char":
+                return with.length() == 1
+                        ? "'" + with.replace("\\", "\\\\").replace("'", "\\'") + "'"
+                        : null;
+            case "Int":
+            case "Long":
+            case "Short":
+            case "Byte":
+            case "Float":
+            case "Double":
+                return with;
+            default:
+                ctx.result.error("The @AlterConstValue property " + prop.getName() + " of "
+                        + ctx.file.getFileName() + " has the unsupported type " + type
+                        + ": only String and the primitive wrapper types are supported.");
+                return null;
+        }
     }
 
     private boolean active(final String flavour) {

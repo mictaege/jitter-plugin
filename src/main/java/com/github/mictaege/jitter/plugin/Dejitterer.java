@@ -17,6 +17,7 @@ import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
 import com.github.javaparser.ast.body.TypeDeclaration;
+import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.ArrayInitializerExpr;
 import com.github.javaparser.ast.expr.Expression;
@@ -77,7 +78,8 @@ import java.util.stream.Stream;
 public final class Dejitterer implements AutoCloseable {
 
     private static final List<String> JITTER_ANNOS = List.of(
-            "OnlyIf", "Fork", "Gateway", "Alter", "Alternatives");
+            "OnlyIf", "Fork", "Gateway", "Alter", "Alternatives",
+            "AlterConstValue", "AlterConstValues");
 
     /**
      * One parser per dejittering run: the parser instances of JavaParser are
@@ -406,6 +408,7 @@ public final class Dejitterer implements AutoCloseable {
                 if (inactive(cu, field)) {
                     ctx.removeElement(field);
                 } else {
+                    applyAlterConstValues(cu, field, ctx);
                     cleanJitterAnnotations(field, ctx);
                 }
             } else if (member instanceof MethodDeclaration) {
@@ -641,6 +644,90 @@ public final class Dejitterer implements AutoCloseable {
             }
         }
         return null;
+    }
+
+    /**
+     * Replaces the initializer of an {@code @AlterConstValue} constant
+     * with the active flavour's value: the dejittered model is the source
+     * of the active flavour alone, so the flavour value declarations are
+     * flattened into the constant they vary. The annotations themselves
+     * are removed together with the other jitter annotations.
+     */
+    private void applyAlterConstValues(final CompilationUnit cu, final FieldDeclaration field,
+                                       final FileCtx ctx) {
+        if (activeFlavour.isEmpty()) {
+            return;
+        }
+        String with = null;
+        for (final AnnotationExpr annotation
+                : repeatable(field.getAnnotations(), "AlterConstValue", "AlterConstValues")) {
+            if (alterConstValueMatches(cu, annotation)) {
+                with = annotationValue(cu, annotation, "with");
+                break;
+            }
+        }
+        if (with == null) {
+            return;
+        }
+        final String type = field.getElementType().asString();
+        final String literal = literalOf(type, with);
+        if (literal == null) {
+            result.error("The @AlterConstValue of " + field.getElementType().asString() + " "
+                    + field.getVariables().get(0).getNameAsString() + " in " + cu.getPrimaryTypeName()
+                    .orElse("an anonymous type") + " has the unsupported type " + type
+                    + ": only String and the wrapper types are supported.");
+            return;
+        }
+        for (final VariableDeclarator var : field.getVariables()) {
+            if (var.getInitializer().isPresent()) {
+                final Range range = var.getInitializer().get().getRange().orElse(null);
+                if (range != null) {
+                    ctx.replace(range, literal);
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether the given {@code @AlterConstValue} names the active flavour
+     * in its {@code ifActive} array.
+     */
+    private boolean alterConstValueMatches(final CompilationUnit cu, final AnnotationExpr annotation) {
+        if (!(annotation instanceof NormalAnnotationExpr)) {
+            return false;
+        }
+        for (final MemberValuePair pair : ((NormalAnnotationExpr) annotation).getPairs()) {
+            if ("ifActive".equals(pair.getNameAsString())
+                    && evalFlavours(cu, pair.getValue()).stream().anyMatch(this::active)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The source literal of the given raw value for the constant's type.
+     */
+    private String literalOf(final String type, final String with) {
+        switch (type) {
+            case "String":
+                return "\"" + with.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+            case "Boolean":
+                return Boolean.parseBoolean(with) ? "true" : "false";
+            case "Character":
+                return with.length() == 1
+                        ? "'" + with.replace("\\", "\\\\").replace("'", "\\'") + "'"
+                        : null;
+            case "Integer":
+            case "Long":
+            case "Short":
+            case "Byte":
+            case "Float":
+            case "Double":
+                return with;
+            default:
+                return null;
+        }
     }
 
     private List<AnnotationExpr> repeatable(final NodeList<AnnotationExpr> annotations,

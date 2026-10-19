@@ -281,7 +281,7 @@ public class ConstantAuditorTest extends StripperTestFixture {
     }
 
     @Test
-    void shouldFailOnAlteredConstantsWithDifferingValues() throws Exception {
+    void shouldFailOnConstantsOfAlterClasses() throws Exception {
         final Path classes = compile(
                 "test/PersonValidator.java",
                 "package test;\n"
@@ -289,83 +289,58 @@ public class ConstantAuditorTest extends StripperTestFixture {
                 + "@Alter(ifActive = \"Esa\", with = \"PersonValidatorA\")\n"
                 + "public class PersonValidator {\n"
                 + "  public static final int LIMIT = 5;\n"
-                + "  public static final String NAME = \"full\";\n"
                 + "}\n",
                 "test/PersonValidatorA.java",
                 "package test;\n"
-                + "import com.github.mictaege.jitter.api.InlinedConstantApproved;\n"
-                + "import com.github.mictaege.jitter.api.OnlyIf;\n"
-                + "@OnlyIf(\"Esa\")\n"
                 + "public class PersonValidatorA {\n"
-                + "  @InlinedConstantApproved\n"
-                + "  public static final int LIMIT = 7;\n"
-                + "  @InlinedConstantApproved\n"
-                + "  public static final String NAME = \"full\";\n"
+                + "  public String validate() { return \"esa\"; }\n"
                 + "}\n");
 
         final StripContext ctx = loadCtx(classes);
         ConstantAuditor.audit(ctx);
 
         assertThat(ctx.result.getErrors().size(), is(1));
-        assertThat(ctx.result.getErrors().get(0), containsString("test.PersonValidator"));
+        assertThat(ctx.result.getErrors().get(0), containsString("The @Alter class test.PersonValidator"));
         assertThat(ctx.result.getErrors().get(0), containsString("LIMIT"));
-        assertThat(ctx.result.getErrors().get(0), containsString("5"));
-        assertThat(ctx.result.getErrors().get(0), containsString("7"));
+        assertThat(ctx.result.getErrors().get(0), containsString("@AlterConstValue"));
         assertThat(ctx.result.getWarnings().isEmpty(), is(true));
     }
 
     @Test
-    void shouldFailOnAlteredConstantsOfInactiveTemplates() throws Exception {
+    void shouldFailOnPrimitiveAlterConstValues() throws Exception {
         final Path classes = compile(
-                "test/PersonValidator.java",
+                "test/TableNames.java",
                 "package test;\n"
-                + "import com.github.mictaege.jitter.api.Alter;\n"
-                + "@Alter(ifActive = \"Nasa\", with = \"PersonValidatorB\")\n"
-                + "public class PersonValidator {\n"
-                + "  public static final int LIMIT = 5;\n"
-                + "}\n",
-                "test/PersonValidatorB.java",
-                "package test;\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValue;\n"
                 + "import com.github.mictaege.jitter.api.InlinedConstantApproved;\n"
-                + "import com.github.mictaege.jitter.api.OnlyIf;\n"
-                + "@OnlyIf(\"Nasa\")\n"
-                + "public class PersonValidatorB {\n"
+                + "public class TableNames {\n"
+                + "  @AlterConstValue(ifActive = {\"Esa\", \"Nasa\"}, with = \"7\")\n"
                 + "  @InlinedConstantApproved\n"
-                + "  public static final int LIMIT = 7;\n"
+                + "  public static final int LIMIT = 5;\n"
                 + "}\n");
 
         final StripContext ctx = loadCtx(classes);
         ConstantAuditor.audit(ctx);
 
-        // the differing values fail the build no matter which flavour is
-        // active - the template's constant is marked, so only the unmarked
-        // constant of the target fails
         assertThat(ctx.result.getErrors().size(), is(1));
-        assertThat(ctx.result.getErrors().get(0), containsString("@Alter target"));
-        assertThat(ctx.result.getErrors().get(0), containsString("LIMIT"));
-        assertThat(ctx.result.getWarnings().isEmpty(), is(true));
+        assertThat(ctx.result.getErrors().get(0), containsString("primitive type"));
+        assertThat(ctx.result.getErrors().get(0), containsString("wrapper type"));
     }
 
     @Test
-    void shouldNotFailOnMarkedConstantsOfTheAlterTarget() throws Exception {
+    void shouldNotFailOnConformAlterConstValues() throws Exception {
         final Path classes = compile(
-                "test/PersonValidator.java",
+                "test/TableNames.java",
                 "package test;\n"
-                + "import com.github.mictaege.jitter.api.Alter;\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValue;\n"
                 + "import com.github.mictaege.jitter.api.InlinedConstantApproved;\n"
-                + "@Alter(ifActive = \"Esa\", with = \"PersonValidatorA\")\n"
-                + "public class PersonValidator {\n"
+                + "public class TableNames {\n"
+                + "  @AlterConstValue(ifActive = \"Esa\", with = \"esa.JOB\")\n"
+                + "  @AlterConstValue(ifActive = \"Nasa\", with = \"nasa.JOB\")\n"
                 + "  @InlinedConstantApproved\n"
-                + "  public static final int LIMIT = 5;\n"
-                + "}\n",
-                "test/PersonValidatorA.java",
-                "package test;\n"
-                + "import com.github.mictaege.jitter.api.InlinedConstantApproved;\n"
-                + "import com.github.mictaege.jitter.api.OnlyIf;\n"
-                + "@OnlyIf(\"Esa\")\n"
-                + "public class PersonValidatorA {\n"
-                + "  @InlinedConstantApproved\n"
-                + "  public static final int LIMIT = 7;\n"
+                + "  public static final String JOB = \"test.TableNames.JOB\";\n"
+                + "  @AlterConstValue(ifActive = {\"Esa\", \"Nasa\"}, with = \"7\")\n"
+                + "  public static final Integer LIMIT = 5;\n"
                 + "}\n");
 
         final StripContext ctx = loadCtx(classes);
@@ -373,6 +348,73 @@ public class ConstantAuditorTest extends StripperTestFixture {
 
         assertThat(ctx.result.getErrors().isEmpty(), is(true));
         assertThat(ctx.result.getWarnings().isEmpty(), is(true));
+    }
+
+    @Test
+    void shouldFailOnWrongPlaceholderAnchor() throws Exception {
+        final Path classes = compile(
+                "test/TableNames.java",
+                "package test;\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValue;\n"
+                + "import com.github.mictaege.jitter.api.InlinedConstantApproved;\n"
+                + "public class TableNames {\n"
+                + "  @AlterConstValue(ifActive = {\"Esa\", \"Nasa\"}, with = \"esa.JOB\")\n"
+                + "  @InlinedConstantApproved\n"
+                + "  public static final String JOB = \"some.other.Value\";\n"
+                + "}\n");
+
+        final StripContext ctx = loadCtx(classes);
+        ConstantAuditor.audit(ctx);
+
+        assertThat(ctx.result.getErrors().size(), is(1));
+        assertThat(ctx.result.getErrors().get(0), containsString("placeholder anchor"));
+        assertThat(ctx.result.getErrors().get(0), containsString("test.TableNames.JOB"));
+    }
+
+    @Test
+    void shouldFailOnUncoveredAlterConstFlavours() throws Exception {
+        final Path classes = compile(
+                "test/TableNames.java",
+                "package test;\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValue;\n"
+                + "import com.github.mictaege.jitter.api.InlinedConstantApproved;\n"
+                + "public class TableNames {\n"
+                + "  @AlterConstValue(ifActive = \"Esa\", with = \"esa.JOB\")\n"
+                + "  @InlinedConstantApproved\n"
+                + "  public static final String JOB = \"test.TableNames.JOB\";\n"
+                + "}\n");
+
+        final StripContext ctx = loadCtx(classes);
+        ConstantAuditor.audit(ctx);
+
+        // the constant is visible in Esa and Nasa, but only Esa has a value
+        assertThat(ctx.result.getErrors().size(), is(1));
+        assertThat(ctx.result.getErrors().get(0), containsString("does not cover the flavour Nasa"));
+    }
+
+    @Test
+    void shouldFailOnDeadAlterConstFlavours() throws Exception {
+        final Path classes = compile(
+                "test/TableNames.java",
+                "package test;\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValue;\n"
+                + "import com.github.mictaege.jitter.api.InlinedConstantApproved;\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                + "public class TableNames {\n"
+                + "  @OnlyIf(\"Esa\")\n"
+                + "  @AlterConstValue(ifActive = \"Esa\", with = \"esa.JOB\")\n"
+                + "  @AlterConstValue(ifActive = \"Nasa\", with = \"nasa.JOB\")\n"
+                + "  @InlinedConstantApproved\n"
+                + "  public static final String JOB = \"test.TableNames.JOB\";\n"
+                + "}\n");
+
+        final StripContext ctx = loadCtx(classes);
+        ConstantAuditor.audit(ctx);
+
+        // the gate keeps the constant in Esa only: the Nasa value is dead
+        assertThat(ctx.result.getErrors().size(), is(1));
+        assertThat(ctx.result.getErrors().get(0), containsString("not visible"));
+        assertThat(ctx.result.getErrors().get(0), containsString("Nasa"));
     }
 
     @Test
