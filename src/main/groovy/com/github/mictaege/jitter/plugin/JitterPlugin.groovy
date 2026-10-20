@@ -195,7 +195,9 @@ class JitterPlugin implements Plugin<Project>  {
                             p.name == 'main' ? 'jitterJar' : "jitter${cap}Jar",
                             org.gradle.api.tasks.bundling.Jar) {
                         group = JitterUtil.GROUP
-                        destinationDirectory = new File(project.buildDir, 'jitter-libs')
+                        // the deliverable lane: what a build job picks up
+                        // from build/libs is always the flavour model
+                        destinationDirectory = new File(project.buildDir, 'libs')
                         // no removal manifest in the deliverable: it lists the
                         // flavour specific classes of the full model - the
                         // verification reads it from the stripped tree instead
@@ -209,6 +211,10 @@ class JitterPlugin implements Plugin<Project>  {
                     def fullJar = project.tasks.findByName(p.name == 'main' ? 'jar' : "${p.name}Jar")
                     if (fullJar != null) {
                         strippedJar.archiveFileName.set(fullJar.archiveFileName)
+                        // the stripped twin takes over the full jar's slot in
+                        // build/libs under the same archive name: the 150%
+                        // model moves to its own lane
+                        fullJar.destinationDirectory = new File(project.buildDir, 'full-libs')
                     }
                     def runtimeElements = project.configurations.findByName(
                             p.name == 'main' ? 'runtimeElements' : "${p.name}RuntimeElements")
@@ -280,7 +286,8 @@ class JitterPlugin implements Plugin<Project>  {
                     def strippedApiJar = project.tasks.create("jitter${cap}Jar",
                             org.gradle.api.tasks.bundling.Jar) {
                         group = JitterUtil.GROUP
-                        destinationDirectory = new File(project.buildDir, 'jitter-libs')
+                        // the deliverable lane, like the stripped runtime jar
+                        destinationDirectory = new File(project.buildDir, 'libs')
                         // the trees may carry the same package-info;
                         // first (packaging) wins, like the old jar. No
                         // removal manifests in the deliverable - see the
@@ -301,6 +308,9 @@ class JitterPlugin implements Plugin<Project>  {
                     def fullApiJar = project.tasks.findByName("${name}Jar")
                     if (fullApiJar != null) {
                         strippedApiJar.archiveFileName.set(fullApiJar.archiveFileName)
+                        // the 150% model moves to its own lane, like the
+                        // full jar of a packaging source set above
+                        fullApiJar.destinationDirectory = new File(project.buildDir, 'full-libs')
                     }
                     def apiRuntime = project.configurations.findByName("${name}RuntimeElements")
                     if (apiRuntime != null) {
@@ -328,6 +338,25 @@ class JitterPlugin implements Plugin<Project>  {
                 project.tasks.withType(Test).configureEach { testTask ->
                     testTask.dependsOn verifyTask
                 }
+
+                // the whole build in one go, the build server's entry point:
+                // every module's verification, including the source level
+                // inlined constants check - invoking this task IS the opt-in,
+                // no system property needed. The task lives on the root
+                // project, created by whichever module applies the plugin
+                // first, and grows with every module that applies it
+                def verifyAll = project.rootProject.tasks.findByName("jitterVerifyAll")
+                if (verifyAll == null) {
+                    verifyAll = project.rootProject.tasks.create("jitterVerifyAll")
+                    verifyAll.group = JitterUtil.GROUP
+                    verifyAll.description = "Verifies the whole build in one go:" +
+                            " the stripped models of every module and the inlined" +
+                            " constant usages of every source set. Run it with the" +
+                            " flavour task of the build server's flavour, e.g." +
+                            " 'gradle flavourNASA jitterVerifyAll'."
+                }
+                verifyAll.dependsOn verifyTask
+                verifyAll.dependsOn inlinedConstantsTasks
 
                 // the source level verification of the @InlinedConstantApproved
                 // usages parses all sources, so it is deliberately opt-in:

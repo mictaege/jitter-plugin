@@ -123,7 +123,7 @@ class JitterVerifyTask extends DefaultTask {
                         return
                     }
                     final def strippedJar = new File(p.buildDir,
-                            "jitter-libs/${fullJar.archiveFileName.get()}")
+                            "libs/${fullJar.archiveFileName.get()}")
                     if (classpathFiles.contains(strippedJar)) {
                         final def manifest = new File(p.buildDir,
                                 "jitter-stripped/${ss.name}/META-INF/jitter/${ss.name}-removed.txt")

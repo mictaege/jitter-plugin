@@ -76,7 +76,8 @@ class CustomSourceSetRolesFunctionalTest {
         assertThat(result.getOutput(), containsString('RUNTIME_ARTIFACT'))
         final String artifact = result.getOutput().readLines().find { it.startsWith('RUNTIME_ARTIFACT') }
                 .substring('RUNTIME_ARTIFACT: '.length()).trim()
-        assertThat(artifact, containsString('jitter-libs'))
+        assertThat(artifact, containsString("build${File.separator}libs"))
+        assertThat(artifact, not(containsString('full-libs')))
         // the runtime artifact is the deliverable: no removal manifest
         // inside, it would list the flavour specific classes of the full
         // model. The verification of the build reads the manifest from

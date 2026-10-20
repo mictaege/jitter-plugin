@@ -118,16 +118,19 @@ class CrossModuleVerifyFunctionalTest {
 
     @Test
     void shouldKeepTheRemovalManifestOutOfTheStrippedJar() {
-        run('flavourA', ':lib:jitterJar')
+        run('flavourA', ':lib:jar', ':lib:jitterJar')
 
-        // the jar is the deliverable: it must not carry the removal
-        // manifest, which lists the flavour specific classes of the full
-        // model
-        def jarFile = prj.resolve('lib/build/jitter-libs/lib.jar').toFile()
+        // the stripped jar is the deliverable of build/libs: it must not
+        // carry the removal manifest, which lists the flavour specific
+        // classes of the full model
+        def jarFile = prj.resolve('lib/build/libs/lib.jar').toFile()
         assertThat(jarFile.exists(), is(true))
         try (def zip = new ZipFile(jarFile)) {
             assertThat(zip.getEntry('META-INF/jitter/main-removed.txt'), is(nullValue()))
         }
+        // the 150% model jar moved to full-libs: same archive name as its
+        // stripped twin, its own lane
+        assertThat(prj.resolve('lib/build/full-libs/lib.jar').toFile().isFile(), is(true))
         // the stripped tree keeps the manifest: the verification of the
         // build reads it there
         def manifest = prj.resolve(
@@ -394,6 +397,41 @@ class CrossModuleVerifyFunctionalTest {
         def result = runAndFail('flavourA', ':app:test')
 
         assertThat(result.getOutput(), containsString('app.AppTest calls removed method lib.Greeter#greetB'))
+    }
+
+    @Test
+    void shouldVerifyTheWholeBuildIncludingInlinedConstantsInOneTask() {
+        // the class fixture's AppFixture dangles in flavour A (its own
+        // scenario) - a clean fixture lets the whole build be consistent
+        write('app/src/testFixtures/java/app/AppFixture.java', """
+            package app;
+
+            import lib.Greeter;
+
+            public class AppFixture {
+
+                public String welcome() {
+                    return new Greeter().greet();
+                }
+            }
+        """)
+
+        // no system property set: the task invocation IS the opt-in for
+        // the source level inlined constants check
+        def result = run('flavourA', 'jitterVerifyAll')
+
+        // the root task ran the reference verification of every module
+        assertThat(result.task(':jitterVerifyAll').outcome, is(TaskOutcome.SUCCESS))
+        assertThat(result.task(':lib:jitterVerifyMain').outcome, is(TaskOutcome.SUCCESS))
+        assertThat(result.task(':app:jitterVerifyMain').outcome, is(TaskOutcome.SUCCESS))
+        // and the inlined constants checks of every source set, without
+        // the opt-in flag
+        assertThat(result.task(':lib:jitterVerifyInlinedConstantsMain').outcome,
+                is(TaskOutcome.SUCCESS))
+        assertThat(result.task(':app:jitterVerifyInlinedConstantsMain').outcome,
+                is(TaskOutcome.SUCCESS))
+        assertThat(result.task(':app:jitterVerifyInlinedConstantsTestFixtures').outcome,
+                is(TaskOutcome.SUCCESS))
     }
 
     private BuildResult run(String... args) {
