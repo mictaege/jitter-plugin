@@ -45,7 +45,7 @@ class WarDeliveryFunctionalTest {
                 mavenCentral()
             }
             dependencies {
-                implementation 'io.github.mictaege:jitter-api:2026.3-rc6'
+                implementation 'io.github.mictaege:jitter-api:2026.3-rc7'
             }
             jitter {
                 flavour { name = 'A' }
