@@ -1,5 +1,6 @@
 package com.github.mictaege.jitter.plugin
 
+import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.file.FileCopyDetails
 import org.gradle.api.file.FileTreeElement
@@ -44,9 +45,33 @@ final class FlavouredResources {
             def path = finalPath(details.path, flavourNames())
             if (winners[finalPath(details.sourcePath, flavourNames())] != details.sourcePath) {
                 details.exclude()
-            } else if (path != details.path) {
-                details.path = path
+            } else {
+                if (path != details.path) {
+                    details.path = path
+                }
+                flavourGate(details)
             }
+        }
+    }
+
+    /**
+     * XML resources with flavour gates in their content (see {@link XmlFlavourTransformer}) are
+     * rewritten while they are copied: the active flavour's variant of the document lands in the
+     * processed resources, the unified source stays untouched for the full model and the generation.
+     * Files without the gate namespace in their content are copied as they are.
+     */
+    private static void flavourGate(final FileCopyDetails details) {
+        if (details.file == null || !XmlResourceGate.isXml(details.name)) {
+            return
+        }
+        try {
+            final byte[] content = java.nio.file.Files.readAllBytes(details.file.toPath())
+            if (XmlFlavourTransformer.gated(
+                    new String(content, java.nio.charset.StandardCharsets.ISO_8859_1))) {
+                details.filter(XmlFlavourTransformer.GateFilter)
+            }
+        } catch (final java.io.IOException e) {
+            throw new GradleException("jitter: could not read the resource ${details.path}", e)
         }
     }
 

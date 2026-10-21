@@ -20,6 +20,7 @@ A simple but complete example how _jitter_ works could be found at [eval.jitter]
   - [Making resources flavour specific](#making-resources-flavour-specific)
   - [Inverted flavour declaration](#inverted-flavour-declaration)
   - [Flavour gates in XML resources](#flavour-gates-in-xml-resources)
+  - [Flavour gates inside XML documents](#flavour-gates-inside-xml-documents)
 - [Usage with Gradle](#usage-with-gradle)
   - [Source set roles](#source-set-roles)
   - [The active flavour in forked JVMs](#the-active-flavour-in-forked-jvms)
@@ -504,6 +505,43 @@ XML-ish resources (```xsd```, ```xjb```, ```xsl```, ```xslt```, ```wsdl```, ```x
 ```
 
 The mechanism is generic: it does not depend on any particular XML vocabulary, and the gate never renames a resource - unlike the flavour suffix convention it expresses presence or absence only. Files without a gate pass through unchanged. Note that xjc generation directives (```<annox:annotatePackage>@...OnlyIf(...)</annox:annotatePackage>``` and other ```annox:``` elements) are deliberately not resource gates: they belong to the generated class model, and a schema whose generated classes are flavour-gated can still be a runtime dependency of surviving code - e.g. as the ```xsd:import``` source of base types used by flavour-specific message schemas that validate against it.
+
+### Flavour gates inside XML documents
+
+The whole-file gate above expresses presence or absence. XML resources can also carry flavour gates on their *components*: schema elements, facets, attributes and so on. A resource with such component gates stays a single unified document that is valid for every tool - in particular for a code generator like xjc, which simply ignores the gates - and the _jitter_ plugin resolves the gates while the resource is copied into the processed resources. The active flavour's variant of the document becomes the runtime resource; the unified source stays untouched for the full model and the generation.
+
+The gate vocabulary lives in the namespace ```https://mictaege.github.io/jitter``` and has two elements, written inside the W3C standard ```annotation```/```appinfo``` hook of the gated component:
+
+```XML
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+            xmlns:jitter="https://mictaege.github.io/jitter">
+
+    <!-- a component that only exists in some flavours -->
+    <xsd:element name="special" type="xsd:string">
+        <xsd:annotation>
+            <xsd:appinfo>
+                <jitter:onlyIf flavours="CUSTOMER_A"/>
+            </xsd:appinfo>
+        </xsd:annotation>
+    </xsd:element>
+
+    <!-- a component whose attributes differ per flavour: every other gate
+         attribute is set on the component for the listed flavours -->
+    <xsd:element name="repacked" type="xsd:boolean" minOccurs="0">
+        <xsd:annotation>
+            <xsd:appinfo>
+                <jitter:set ifActive="CUSTOMER_B" minOccurs="1"/>
+            </xsd:appinfo>
+        </xsd:annotation>
+    </xsd:element>
+</xsd:schema>
+```
+
+- ```<jitter:onlyIf flavours="A, B"/>``` - the annotated component is only part of the named flavours (comma or blank separated) and is removed for every other active flavour. Without an active flavour - the full model - every component is kept.
+- ```<jitter:set ifActive="A" minOccurs="1"/>``` - every other attribute of the gate is set on the annotated component while one of the listed flavours is active; the component keeps its own attribute value otherwise. Several ```set``` gates may annotate the same component, like ```@AlterConstValue``` does.
+
+Typical use cases are pattern facets that union would silently loosen (```xsd:pattern``` is an OR by definition, so a unified schema cannot carry both variants ungated) or cardinalities like ```minOccurs```/```use``` that only differ per flavour. The resolved document carries no gate residue: the gate elements are stripped - like the _jitter_ annotations are stripped from the bytecode - and an ```appinfo``` or ```annotation``` section that becomes empty is removed as well. Files without the gate namespace in their content are copied unchanged, so the mechanism is opt-in per file. The flavour resolved resources also become part of the dejittered source variant.
+
 
 ## Usage with Gradle
 
