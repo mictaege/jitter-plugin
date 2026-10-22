@@ -210,10 +210,19 @@ class JitterPlugin implements Plugin<Project>  {
                     strippedJar.dependsOn verify
                     def fullJar = project.tasks.findByName(p.name == 'main' ? 'jar' : "${p.name}Jar")
                     if (fullJar != null) {
-                        strippedJar.archiveFileName.set(fullJar.archiveFileName)
-                        // the stripped twin takes over the full jar's slot in
-                        // build/libs under the same archive name: the 150%
-                        // model moves to its own lane
+                        // the stripped twin takes over the full jar's former
+                        // published coordinates - the flavour model keeps the
+                        // plain name of the deliverable - while the 150% model
+                        // moves to a 'full' classifier. Both are outgoing
+                        // artifacts of the same component (api vs runtime
+                        // variant), so they must not share the published
+                        // coordinates: a Maven publication rejects two
+                        // artifacts with the same extension and classifier
+                        def fullClassifier = fullJar.archiveClassifier.get()
+                        strippedJar.archiveClassifier.set(fullClassifier)
+                        fullJar.archiveClassifier.set(
+                                fullClassifier.isEmpty() ? 'full' : "${fullClassifier}-full")
+                        // the 150% model moves to its own lane
                         fullJar.destinationDirectory = new File(project.buildDir, 'full-libs')
                     }
                     def runtimeElements = project.configurations.findByName(
@@ -307,7 +316,16 @@ class JitterPlugin implements Plugin<Project>  {
                     }
                     def fullApiJar = project.tasks.findByName("${name}Jar")
                     if (fullApiJar != null) {
-                        strippedApiJar.archiveFileName.set(fullApiJar.archiveFileName)
+                        // the stripped api jar takes over the full jar's
+                        // former published coordinates, the 150% model moves
+                        // to a '<classifier>-full' classifier - both are
+                        // outgoing artifacts of the same component and must
+                        // not collide in a Maven publication (see the
+                        // packaging source sets above)
+                        def fullApiClassifier = fullApiJar.archiveClassifier.get()
+                        strippedApiJar.archiveClassifier.set(fullApiClassifier)
+                        fullApiJar.archiveClassifier.set(
+                                fullApiClassifier.isEmpty() ? 'full' : "${fullApiClassifier}-full")
                         // the 150% model moves to its own lane, like the
                         // full jar of a packaging source set above
                         fullApiJar.destinationDirectory = new File(project.buildDir, 'full-libs')

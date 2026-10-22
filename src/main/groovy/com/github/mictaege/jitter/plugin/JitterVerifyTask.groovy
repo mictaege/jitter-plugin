@@ -117,13 +117,19 @@ class JitterVerifyTask extends DefaultTask {
         project.rootProject.allprojects { p ->
             p.plugins.withId('java') {
                 p.sourceSets.all { ss ->
-                    final def fullJar = p.tasks.findByName(
-                            ss.name == 'main' ? 'jar' : "${ss.name}Jar")
-                    if (fullJar == null || !fullJar.hasProperty('archiveFileName')) {
+                    // the stripped jar keeps the plain archive name of the
+                    // former full jar - the full model moved to a 'full'
+                    // classifier - so the deliverable is looked up through
+                    // the strip jar task, not through the full jar's name
+                    final def cap = ss.name.capitalize()
+                    final def strippedJarTask = p.tasks.findByName(
+                            ss.name == 'main' ? 'jitterJar' : "jitter${cap}Jar")
+                    if (strippedJarTask == null
+                            || !strippedJarTask.hasProperty('archiveFileName')) {
                         return
                     }
                     final def strippedJar = new File(p.buildDir,
-                            "libs/${fullJar.archiveFileName.get()}")
+                            "libs/${strippedJarTask.archiveFileName.get()}")
                     if (classpathFiles.contains(strippedJar)) {
                         final def manifest = new File(p.buildDir,
                                 "jitter-stripped/${ss.name}/META-INF/jitter/${ss.name}-removed.txt")

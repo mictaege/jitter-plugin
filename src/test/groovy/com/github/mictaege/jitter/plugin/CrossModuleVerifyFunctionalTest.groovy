@@ -128,9 +128,10 @@ class CrossModuleVerifyFunctionalTest {
         try (def zip = new ZipFile(jarFile)) {
             assertThat(zip.getEntry('META-INF/jitter/main-removed.txt'), is(nullValue()))
         }
-        // the 150% model jar moved to full-libs: same archive name as its
-        // stripped twin, its own lane
-        assertThat(prj.resolve('lib/build/full-libs/lib.jar').toFile().isFile(), is(true))
+        // the 150% model jar moved to full-libs with a 'full' classifier:
+        // the flavour model keeps the plain published coordinates, the two
+        // models must not collide in a Maven publication
+        assertThat(prj.resolve('lib/build/full-libs/lib-full.jar').toFile().isFile(), is(true))
         // the stripped tree keeps the manifest: the verification of the
         // build reads it there
         def manifest = prj.resolve(
