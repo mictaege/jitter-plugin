@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.github.mictaege"
-version = "2026.3-rc9"
+version = "2026.3-rc10"
 
 gradlePlugin {
     website.set("https://github.com/mictaege/jitter-plugin")
