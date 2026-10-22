@@ -5,7 +5,10 @@ import org.gradle.api.GradleException
 import org.gradle.api.file.FileCollection
 import org.gradle.work.DisableCachingByDefault
 import org.gradle.api.tasks.Classpath
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 
 import java.io.IOException
@@ -23,8 +26,15 @@ import java.io.IOException
  * manifest as before, and the manifests of dependent projects of the same
  * build are read from their stripped trees: the jars of the build carry no
  * manifest anymore, because they are the deliverables.
+ *
+ * <p>Everything the verification reads is a task input - the stripped
+ * classes and the resources of the verified source sets, the dependency
+ * classpath, the removal manifests of the dependent projects and the
+ * active flavour - and the stale resource report is the task output, so
+ * the verification is up-to-date checked like any other task: a second
+ * build without changes skips it.
  */
-@DisableCachingByDefault(because = "the verification is a build check over the stripped model and should always run")
+@DisableCachingByDefault(because = "the verification is a build check over the stripped model, its value is the up-to-date check, not the caching")
 class JitterVerifyTask extends DefaultTask {
 
     JitterVerifyTask() {
@@ -34,16 +44,40 @@ class JitterVerifyTask extends DefaultTask {
     @Internal
     List<JitterStripTask> stripTasks = []
 
-    @Internal
+    /** The stripped classes the verification scans for dangling references. */
+    @InputFiles
     Set<File> allClassesDirs = []
 
     /** Resource directories of the verified source sets, for the stale resource report. */
-    @Internal
+    @InputFiles
     Set<File> allResourcesDirs = []
 
     /** Runtime classpath to read the removal manifests of flavour dependencies from. */
     @Classpath
     FileCollection dependencyClasspath
+
+    /** The active flavour, empty if no flavour is selected (the 150% model). */
+    @Input
+    String getActiveFlavour() {
+        System.getProperty(JitterUtil.FLAVOUR_PROP) ?: ''
+    }
+
+    /**
+     * The removal manifests of the dependent projects of the same build
+     * (see {@link #siblingManifests()}): a change of a producer's stripped
+     * model re-runs the verification, so a skip means the model is verified
+     * against the CURRENT removals of the producers, not stale ones.
+     */
+    @InputFiles
+    Set<File> getSiblingManifestFiles() {
+        dependencyClasspath == null ? [] as Set : siblingManifests().keySet()
+    }
+
+    /** The stale resource report, the task's output artifact. */
+    @OutputFile
+    File getReportFile() {
+        new File(project.buildDir, "reports/jitter/${name}-stale-resources.txt")
+    }
 
     @TaskAction
     void run() {
@@ -99,19 +133,19 @@ class JitterVerifyTask extends DefaultTask {
     }
 
     /**
-     * The removal manifests of the dependent projects of this build: their
-     * stripped jars carry no manifest anymore - the jars are the
-     * deliverables - so the manifest of every project whose stripped jar is
-     * on the dependency classpath is read from its stripped tree directly.
-     * Derived at execution time like the template index of the dejittering,
-     * so that every project of the build is evaluated. External stripped
-     * artifacts have no manifest; like any non jitter dependency they
-     * simply contribute no removals.
+     * The removal manifests of the dependent projects of this build, mapped
+     * to their stripped jar: their jars carry no manifest anymore - they are
+     * the deliverables - so the manifest of every project whose stripped
+     * jar is on the dependency classpath is read from its stripped tree
+     * directly. Derived at execution time like the template index of the
+     * dejittering, so that every project of the build is evaluated. External
+     * stripped artifacts have no manifest; like any non jitter dependency
+     * they simply contribute no removals.
      */
-    private void readSiblingManifests(final Set<String> removedClasses,
-                                      final Set<String> removedMembers) {
+    private Map<File, File> siblingManifests() {
+        final def manifests = [:]
         if (dependencyClasspath == null) {
-            return
+            return manifests
         }
         final def classpathFiles = dependencyClasspath.files
         project.rootProject.allprojects { p ->
@@ -131,18 +165,24 @@ class JitterVerifyTask extends DefaultTask {
                     final def strippedJar = new File(p.buildDir,
                             "libs/${strippedJarTask.archiveFileName.get()}")
                     if (classpathFiles.contains(strippedJar)) {
-                        final def manifest = new File(p.buildDir,
-                                "jitter-stripped/${ss.name}/META-INF/jitter/${ss.name}-removed.txt")
-                        if (manifest.isFile()) {
-                            try {
-                                RemovalManifest.readFile(manifest, removedClasses, removedMembers)
-                            } catch (IOException e) {
-                                throw new GradleException(
-                                        "jitter: could not read the removal manifest of the"
-                                                + " stripped ${ss.name} model of ${p.name}", e)
-                            }
-                        }
+                        manifests.put(new File(p.buildDir,
+                                "jitter-stripped/${ss.name}/META-INF/jitter/${ss.name}-removed.txt"), strippedJar)
                     }
+                }
+            }
+        }
+        manifests
+    }
+
+    private void readSiblingManifests(final Set<String> removedClasses,
+                                      final Set<String> removedMembers) {
+        siblingManifests().keySet().each { manifest ->
+            if (manifest.isFile()) {
+                try {
+                    RemovalManifest.readFile(manifest, removedClasses, removedMembers)
+                } catch (IOException e) {
+                    throw new GradleException(
+                            "jitter: could not read the removal manifest of ${manifest}", e)
                 }
             }
         }
@@ -156,28 +196,35 @@ class JitterVerifyTask extends DefaultTask {
      * resources usually follow the flavour suffix convention and are dropped
      * by the resource processing, so an unsuffixed resource of a gated class
      * is a candidate for review, not necessarily an error.
+     *
+     * The report is written to the task's output file as well, so the
+     * warnings survive an up-to-date run and can be reviewed without
+     * re-running the build.
      */
     private void reportStaleResources(final Set<String> removedClasses) {
-        if (removedClasses.isEmpty() || allResourcesDirs.isEmpty()) {
-            return
-        }
-        allResourcesDirs.each { dir ->
-            if (dir == null || !dir.isDirectory()) {
-                return
-            }
-            dir.eachFileRecurse { file ->
-                if (file.isFile()) {
-                    def relative = dir.toPath().relativize(file.toPath()).toString()
-                            .replace(File.separator, '/')
-                    def dot = relative.lastIndexOf('.')
-                    def withoutExt = dot < 0 ? relative : relative.substring(0, dot)
-                    if (removedClasses.contains(withoutExt)) {
-                        logger.warn("jitter: resource {} ships without its owner class {} (removed by the active flavour)",
-                                relative, withoutExt.replace('/', '.') + ".class")
+        final def stale = [] as Set
+        if (!removedClasses.isEmpty()) {
+            allResourcesDirs.each { dir ->
+                if (dir == null || !dir.isDirectory()) {
+                    return
+                }
+                dir.eachFileRecurse { file ->
+                    if (file.isFile()) {
+                        def relative = dir.toPath().relativize(file.toPath()).toString()
+                                .replace(File.separator, '/')
+                        def dot = relative.lastIndexOf('.')
+                        def withoutExt = dot < 0 ? relative : relative.substring(0, dot)
+                        if (removedClasses.contains(withoutExt)) {
+                            stale << relative
+                            logger.warn("jitter: resource {} ships without its owner class {} (removed by the active flavour)",
+                                    relative, withoutExt.replace('/', '.') + ".class")
+                        }
                     }
                 }
             }
         }
+        reportFile.parentFile.mkdirs()
+        reportFile.text = stale.sort().join('\n') + (stale.isEmpty() ? '' : '\n')
     }
 
 }
