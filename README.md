@@ -542,6 +542,8 @@ The gate vocabulary lives in the namespace ```https://mictaege.github.io/jitter`
 
 Typical use cases are pattern facets that union would silently loosen (```xsd:pattern``` is an OR by definition, so a unified schema cannot carry both variants ungated) or cardinalities like ```minOccurs```/```use``` that only differ per flavour. The resolved document carries no gate residue: the gate elements are stripped - like the _jitter_ annotations are stripped from the bytecode - and an ```appinfo``` or ```annotation``` section that becomes empty is removed as well. Files without the gate namespace in their content are copied unchanged, so the mechanism is opt-in per file. The flavour resolved resources also become part of the dejittered source variant.
 
+The gate vocabulary itself is described by a schema that ships with the plugin (```jitter-gate.xsd```, also part of the plugin artifacts) and is served at the namespace URL (GitHub Pages of the [mictaege/jitter](https://github.com/mictaege/jitter) repository). IntelliJ offers "Fetch external resource" on the ```xmlns:jitter``` declaration and resolves it against the schema, which removes the red "unregistered namespace" marking and gives completion and inspection for the gate elements. A manual URI mapping (Settings -> Languages & Frameworks -> Schemas and DTDs) to ```https://mictaege.github.io/jitter/jitter-gate.xsd``` or a local copy works as well and survives plugin upgrades.
+
 
 ## Usage with Gradle
 
