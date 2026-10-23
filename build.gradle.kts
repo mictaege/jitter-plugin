@@ -22,7 +22,7 @@ gradlePlugin {
             displayName = "Jitter Plugin"
             description = "The jitter-plugin is a Gradle plugin to build and distribute different flavours of an application from a single source base."
             implementationClass = "com.github.mictaege.jitter.plugin.JitterPlugin"
-            tags.set(listOf("flavours", "bytecode"))
+            tags.set(listOf("flavours", "flavors", "variants", "bytecode", "asm"))
         }
     }
 }
