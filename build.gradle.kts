@@ -13,6 +13,11 @@ plugins {
 group = "io.github.mictaege"
 version = "2026.3-rc10"
 
+// the jitter-api version the plugin is built against: also the version the
+// functional test fixtures resolve, read from the generated test resource
+// (see generateTestResources) - no test pins a hand bumped version
+val jitterApiVersion = "2026.3-rc8"
+
 gradlePlugin {
     website.set("https://github.com/mictaege/jitter-plugin")
     vcsUrl.set("https://github.com/mictaege/jitter-plugin.git")
@@ -38,7 +43,7 @@ repositories {
 
 dependencies {
     implementation(gradleApi())
-    implementation("io.github.mictaege:jitter-api:2026.3-rc8")
+    implementation("io.github.mictaege:jitter-api:$jitterApiVersion")
     implementation("com.google.guava:guava:33.4.8-jre")
     implementation("org.ow2.asm:asm:9.10.1")
     implementation("org.ow2.asm:asm-commons:9.10.1")
@@ -69,6 +74,21 @@ tasks.register("generateResources") {
 
 tasks.processResources {
     from(files(tasks.getByName("generateResources")))
+}
+
+// the jitter-api version for the functional test fixtures: read through
+// JitterApi.version(), so a version bump is a single line in this file
+tasks.register("generateTestResources") {
+    val propFile = file("$buildDir/generated-test/jitter-api.properties")
+    outputs.file(propFile)
+    doLast {
+        mkdir(propFile.parentFile)
+        propFile.writeText("jitter.api.version=$jitterApiVersion")
+    }
+}
+
+tasks.processTestResources {
+    from(files(tasks.getByName("generateTestResources")))
 }
 
 tasks.test {

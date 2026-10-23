@@ -48,7 +48,7 @@ class CrossModuleVerifyFunctionalTest {
                 mavenCentral()
             }
             dependencies {
-                implementation 'io.github.mictaege:jitter-api:2026.3-rc8'
+                implementation '${JitterApi.dependency()}'
             }
             jitter {
                 flavour { name = 'A' }

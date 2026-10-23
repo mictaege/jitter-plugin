@@ -48,8 +48,8 @@ class MavenPublishFunctionalTest {
                 mavenCentral()
             }
             dependencies {
-                implementation 'io.github.mictaege:jitter-api:2026.3-rc7'
-                testFixturesImplementation 'io.github.mictaege:jitter-api:2026.3-rc7'
+                implementation '${JitterApi.dependency()}'
+                testFixturesImplementation '${JitterApi.dependency()}'
             }
             publishing {
                 publications {
