@@ -1,0 +1,114 @@
+package com.github.mictaege.jitter.plugin
+
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.FileCollection
+import org.gradle.api.tasks.CacheableTask
+import org.gradle.api.tasks.Classpath
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+
+/**
+ * Strips the flavour specific bytecode of one source set.
+ *
+ * With an output directory the compiled classes (the full 150% model)
+ * stay untouched: the stripped model is written to the output directory
+ * instead, so that compilation against the full model remains possible
+ * while packaging and runtime consume the stripped model. Without an
+ * output directory the classes are stripped in place.
+ */
+@CacheableTask
+class JitterStripTask extends DefaultTask {
+
+    JitterStripTask() {
+        group = JitterUtil.GROUP
+    }
+
+    /**
+     * Relative path sensitivity, so the stripped model can also be taken
+     * from the build cache when the project lives at another location.
+     */
+    @PathSensitive(PathSensitivity.RELATIVE)
+    @InputFiles
+    Set<File> classesDirs = []
+
+    /** Directory the stripped model is written to, instead of in place. */
+    @Optional
+    @OutputDirectory
+    File outputDir
+
+    /** Name of the source set, used for the removal manifest inside the stripped tree. */
+    @Internal
+    String manifestName
+
+    /**
+     * Classpath for @Alter templates that live in dependent libraries.
+     * A classpath input: the templates are read and inlined at strip time,
+     * so a template change must invalidate the task even when the module's
+     * own compiled classes stay unchanged.
+     */
+    @Optional
+    @Classpath
+    FileCollection templateClasspath
+
+    /**
+     * The names of all flavours of the project: the constant audit tells a
+     * flavour-variant @OnlyIf gate from a gate that covers all flavours.
+     */
+    @Input
+    List<String> flavourNames = []
+
+    @Internal
+    StripResult stripResult = new StripResult()
+
+    /** The active flavour, empty if no flavour is selected (the 150% model). */
+    @Input
+    String getActiveFlavour() {
+        System.getProperty(JitterUtil.FLAVOUR_PROP) ?: ''
+    }
+
+    @TaskAction
+    void run() {
+        def stripper = new BytecodeStripper()
+        def templateClasspathFiles = templateClasspath == null ? [] : templateClasspath.files as List
+        // the stripped tree is written as a whole: clean the output of a
+        // previous run first
+        if (outputDir != null) {
+            outputDir.deleteDir()
+        }
+        def sourceDirs = classesDirs.findAll { it.exists() }*.toPath()
+        if (sourceDirs.isEmpty()) {
+            return
+        }
+        // all classes directories of the source set are stripped as ONE
+        // unit: a mixed Java/Kotlin source set spreads package gates,
+        // classes and cross references over several of them
+        def result = outputDir == null
+                ? stripper.strip(sourceDirs, null, templateClasspathFiles, flavourNames)
+                : stripper.strip(sourceDirs, outputDir.toPath(), templateClasspathFiles, flavourNames)
+        stripResult.merge(result)
+        // one output format for everything the plugin says: every line is
+        // prefixed with 'jitter: ', the severity comes from the log level -
+        // plain lifecycle output for information, warnings rendered as
+        // warnings, errors fail the task
+        stripResult.infos.each { logger.lifecycle("jitter: " + it) }
+        stripResult.warnings.each { logger.warn("jitter: " + it) }
+        if (!stripResult.errors.isEmpty()) {
+            throw new GradleException("jitter: stripping failed:\n  " + stripResult.errors.join("\n  "))
+        }
+        // the removal manifest travels in the stripped tree, so it ends up in
+        // the stripped runtime artifacts; consumers read it from the classpath
+        // to verify their own classes against these removals
+        if (outputDir != null && manifestName != null) {
+            RemovalManifest.write(new File(outputDir, RemovalManifest.DIR + manifestName + RemovalManifest.SUFFIX).toPath(),
+                    activeFlavour, stripResult)
+        }
+    }
+
+}

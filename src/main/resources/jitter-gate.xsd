@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ The schema of the jitter flavour gate vocabulary, the jitter:onlyIf and
+  ~ jitter:set elements that flavour gate components of an XML resource
+  ~ (see the "Flavour gates inside XML documents" section of the jitter
+  ~ README). The gates sit inside the W3C standard annotation/appinfo hook
+  ~ of the gated component:
+  ~
+  ~   <xsd:element name="repacked" type="xsd:boolean" minOccurs="0">
+  ~     <xsd:annotation>
+  ~       <xsd:appinfo>
+  ~         <jitter:onlyIf flavours="Bmx"/>
+  ~         <jitter:set ifActive="Bmx" minOccurs="1"/>
+  ~       </xsd:appinfo>
+  ~     </xsd:annotation>
+  ~   </xsd:element>
+  ~
+  ~ The jitter plugin resolves the gates while the resources are copied; the
+  ~ unified source document stays valid for every XML tool. This schema is
+  ~ deliberately permissive about the components AROUND the gates: it only
+  ~ describes the gate elements themselves, so it can validate the appinfo
+  ~ content of any vocabulary.
+  ~
+  ~ The namespace https://mictaege.github.io/jitter serves this schema
+  ~ (GitHub Pages of the mictaege/jitter repository), so IDEs can fetch it
+  ~ right from the xmlns declaration - IntelliJ: "Fetch external resource"
+  ~ on the red URI, or a manual URI mapping (Settings -> Languages and
+  ~ Frameworks -> Schemas and DTDs) to the schema file. Either way the red
+  ~ "unregistered namespace" marking of the xmlns declaration disappears
+  ~ and completion and inspection for the gate elements become available.
+  -->
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+            xmlns:jitter="https://mictaege.github.io/jitter"
+            targetNamespace="https://mictaege.github.io/jitter"
+            elementFormDefault="qualified">
+
+    <xsd:element name="onlyIf">
+        <xsd:annotation>
+            <xsd:documentation>
+                The annotated component is only part of the flavours named in
+                the (comma or blank separated) flavours list and is removed
+                from the document for every other active flavour. Without an
+                active flavour - the full model - every component is kept.
+            </xsd:documentation>
+        </xsd:annotation>
+        <xsd:complexType>
+            <xsd:attribute name="flavours" type="jitter:flavourList" use="required"/>
+        </xsd:complexType>
+    </xsd:element>
+
+    <xsd:element name="set">
+        <xsd:annotation>
+            <xsd:documentation>
+                Every attribute of the gate other than ifActive is set on the
+                annotated component while one of the (comma or blank
+                separated) listed flavours is active - e.g. minOccurs, use,
+                maxOccurs, pattern values. The component keeps its own
+                attribute value otherwise. Several set gates may annotate
+                the same component, like @AlterConstValue does.
+            </xsd:documentation>
+        </xsd:annotation>
+        <xsd:complexType>
+            <xsd:attribute name="ifActive" type="jitter:flavourList" use="required"/>
+            <!-- the component attributes to set are unprefixed, i.e. of no
+                 namespace - ##other would not match them -->
+            <xsd:anyAttribute namespace="##any" processContents="lax"/>
+        </xsd:complexType>
+    </xsd:element>
+
+    <xsd:simpleType name="flavourList">
+        <xsd:annotation>
+            <xsd:documentation>
+                One or more flavour names, separated by commas or blanks.
+            </xsd:documentation>
+        </xsd:annotation>
+        <xsd:restriction base="xsd:token">
+            <xsd:pattern value="[^,\s]+(\s*,\s*[^,\s]+)*"/>
+        </xsd:restriction>
+    </xsd:simpleType>
+
+</xsd:schema>

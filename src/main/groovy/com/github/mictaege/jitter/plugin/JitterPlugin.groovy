@@ -1,9 +1,12 @@
 package com.github.mictaege.jitter.plugin
 
-import com.github.mictaege.spoon_gradle_plugin.SpoonExtension
-import com.github.mictaege.spoon_gradle_plugin.SpoonTask
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.bundling.Jar
+import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.api.tasks.testing.Test
 import org.gradle.api.Task
 import org.gradle.language.jvm.tasks.ProcessResources
 
@@ -19,40 +22,13 @@ class JitterPlugin implements Plugin<Project>  {
 
         project.configure(project) {
             apply plugin: 'java'
-            apply plugin: 'spoon'
-
-            project.spoon.lazyExtensions = { ->
-                    def spoonExt = new SpoonExtension()
-                    spoonExt.processors = [
-                            'com.github.mictaege.jitter.plugin.AlterClassProcessor',
-                            'com.github.mictaege.jitter.plugin.ForkMethodProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfClassProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfFieldProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfMethodProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfConstructorProcessor',
-                            'com.github.mictaege.jitter.plugin.OnlyIfPackageProcessor'
-                    ]
-                    spoonExt.compliance = project.jitter.compliance
-                    spoonExt.exclude = project.jitter.excludeSrcSets
-                    spoonExt.fileFilter = { File srcFile ->
-                        def pckInfo = new File(srcFile.parentFile, "package-info.java")
-                        def pckInfoVar = pckInfo.exists() && pckInfo.text.contains("com.github.mictaege.jitter.api")
-                        pckInfoVar || (srcFile.exists() && srcFile.text.contains("com.github.mictaege.jitter.api"))
-                    }
-                    spoonExt
-                }
-
-        }
-
-        project.tasks.withType(SpoonTask).configureEach { task ->
-            dependOnActiveFlavour(project, task)
         }
 
         project.tasks.withType(ProcessResources).configureEach { task ->
             FlavouredResources.configure(project, task)
         }
 
-        project.afterEvaluate({
+        project.afterEvaluate({ ->
             project.jitter.flavours.each {f ->
                 project.task("flavour${f.name}", type: JitterTask) {
                     flavour = f
@@ -60,6 +36,372 @@ class JitterPlugin implements Plugin<Project>  {
             }
             selectRequestedFlavour(project)
         })
+
+        project.afterEvaluate({ ->
+            def roles = sourceSetRoles(project)
+            def stripTasks = []
+            def inlinedConstantsTasks = []
+            def dejitterTasks = []
+            def allClassesDirs = [] as Set
+            def allResourcesDirs = [] as Set
+            def manifestClasspath = project.files()
+
+            project.sourceSets.all { srcSet ->
+                // the flavour-stripped model is the default output of the
+                // build: compilation still happens against the full 150%
+                // model (the compiled classes stay untouched and downstream
+                // compilation resolves them), while packaging and runtime
+                // consume the stripped model
+                if (!project.jitter.excludeSrcSets.contains(srcSet.name)) {
+                    def stripTask = project.task("jitterStrip${srcSet.name.capitalize()}", type: JitterStripTask)
+                    stripTask.classesDirs = srcSet.output.classesDirs.files
+                    stripTask.templateClasspath = srcSet.compileClasspath
+                    stripTask.flavourNames = project.jitter.flavours.collect { it.name }
+                    stripTask.dependsOn srcSet.compileJavaTaskName
+                    stripTask.manifestName = srcSet.name
+                    stripTasks << stripTask
+
+                    stripTask.outputDir = new File(project.buildDir, "jitter-stripped/${srcSet.name}")
+
+                    // the source level verification of the @InlinedConstantApproved
+                    // usages: javac has inlined them, so the bytecode based
+                    // reference verification cannot see them; this check
+                    // parses the sources and fails the build when a usage
+                    // is kept in a flavour where the constant is removed
+                    def inlinedConstantsTask = project.task(
+                            "jitterVerifyInlinedConstants${srcSet.name.capitalize()}",
+                            type: JitterVerifyInlinedConstantsTask)
+                    inlinedConstantsTask.sourceDirs = srcSet.java.srcDirs
+                    inlinedConstantsTask.classpath = srcSet.compileClasspath
+                    // captured before the test-like source sets point their
+                    // output at the stripped tree: the usage check resolves
+                    // against the compiled full model, whose markers and
+                    // gates the stripping would remove
+                    inlinedConstantsTask.ownClassesDirs = srcSet.output.classesDirs
+                    inlinedConstantsTask.flavourNames = project.jitter.flavours.collect { it.name }
+                    // the sources may be generated by another task (jaxb and
+                    // the like): the compilation consumes them and carries
+                    // the dependency, so the check runs after it
+                    inlinedConstantsTask.dependsOn srcSet.compileJavaTaskName
+                    // the Kotlin usage check resolves the own constants and
+                    // package gates from the own compiled classes
+                    def kotlinCompile = project.tasks.findByName(
+                            srcSet.getTaskName('compile', 'Kotlin'))
+                    if (kotlinCompile != null) {
+                        inlinedConstantsTask.dependsOn kotlinCompile
+                    }
+                    inlinedConstantsTask.kotlinCompilerJars = project.configurations.detachedConfiguration(
+                            project.dependencies.create(JitterUtil.KOTLIN_COMPILER_EMBEDDABLE))
+                    inlinedConstantsTasks << inlinedConstantsTask
+
+                    // the dejittered source variant: the original sources
+                    // minus the flavour specific code of the active flavour,
+                    // as source level surgery that keeps comments, formatting
+                    // and line numbers - for source deliveries. Its removals
+                    // are cross checked against the manifest of the stripped
+                    // model, so it runs after the strip task
+                    def dejitterTask = project.task(
+                            "dejitter${srcSet.name.capitalize()}", type: JitterDejitterTask)
+                    dejitterTasks << dejitterTask
+                    dejitterTask.sourceDirs = srcSet.java.srcDirs
+                    def resourcesDir = srcSet.output.resourcesDir
+                    if (resourcesDir != null) {
+                        dejitterTask.resourceDirs = [resourcesDir]
+                    }
+                    dejitterTask.compileClasspath = srcSet.compileClasspath
+                    dejitterTask.manifestFile = new File(project.buildDir,
+                            "jitter-stripped/${srcSet.name}/META-INF/jitter/${srcSet.name}-removed.txt")
+                    dejitterTask.dependsOn stripTask, project.tasks.named(srcSet.processResourcesTaskName)
+                    dejitterTask.outputDir = new File(project.buildDir, "${JitterUtil.DEJITTERED_DIR}/${srcSet.name}")
+                    // the Kotlin PSI of the source level dejittering resolves
+                    // lazily from the repositories of the applying build and
+                    // loads in an isolated classloader - it is deliberately no
+                    // runtime dependency of the plugin, it would clash with the
+                    // Kotlin toolchain of Kotlin based builds
+                    dejitterTask.kotlinCompilerJars = project.configurations.detachedConfiguration(
+                            project.dependencies.create(JitterUtil.KOTLIN_COMPILER_EMBEDDABLE))
+                    // the runtime classpath carries the removal manifests of
+                    // the flavour dependencies (their stripped runtime
+                    // artifacts); collecting it per source set lets the
+                    // aggregate verify check the surviving classes against
+                    // the removals of the modules this one depends on
+                    manifestClasspath = manifestClasspath + srcSet.runtimeClasspath
+                    if (!roles.packaging.contains(srcSet.name) && !roles.api.contains(srcSet.name)) {
+                        // test-like source sets: the stripped model is their
+                        // runtime, so the source set output points at the
+                        // stripped tree (test tasks and IDEs pick it up from
+                        // there). The compiled classes stay untouched, so
+                        // switching flavours just re-strips them.
+                        srcSet.output.classesDirs = project.files(stripTask)
+                    }
+                    // packaging and api source sets keep their full compiled
+                    // classes as the compile identity; only their runtime
+                    // artifact is the stripped model, see the wiring below
+                }
+
+                // the aggregate verify checks the classes that ship or run:
+                // the stripped trees of the packaging and api source sets
+                // instead of the full classes, the classes of every other
+                // source set as they are (test-like: the reassigned output)
+                if ((roles.packaging.contains(srcSet.name) || roles.api.contains(srcSet.name))
+                        && !project.jitter.excludeSrcSets.contains(srcSet.name)) {
+                    def stripTask = project.tasks.findByName("jitterStrip${srcSet.name.capitalize()}")
+                    if (stripTask != null && stripTask.outputDir != null) {
+                        allClassesDirs.add(stripTask.outputDir)
+                    }
+                } else {
+                    allClassesDirs.addAll(srcSet.output.classesDirs.files)
+                }
+                // for the stale resource report of the aggregate verify
+                if (!project.jitter.excludeSrcSets.contains(srcSet.name)
+                        && srcSet.output.resourcesDir != null) {
+                    allResourcesDirs.add(srcSet.output.resourcesDir)
+                }
+            }
+
+            if (!stripTasks.isEmpty()) {
+                // the packaging source sets with their strip tasks: the ones
+                // whose stripped model is the module's runtime artifact
+                def packagingSets = roles.packaging.collect { name ->
+                    [name: name,
+                     srcSet: project.sourceSets.findByName(name),
+                     strip: project.tasks.findByName("jitterStrip${name.capitalize()}")]
+                }.findAll { it.strip != null && it.strip.outputDir != null }
+
+                // a scoped verify checks only the stripped tree of one
+                // packaging source set against the members removed from it.
+                // It lets artifact tasks fail early on dangling references,
+                // without pulling the compilation of source sets that consume
+                // the artifact.
+                packagingSets.each { p ->
+                    def cap = p.name.capitalize()
+                    def verify = project.task(
+                            p.name == 'main' ? 'jitterVerifyMain' : "jitterVerify${cap}", type: JitterVerifyTask)
+                    verify.stripTasks = [p.strip]
+                    verify.allClassesDirs = [p.strip.outputDir]
+                    verify.allResourcesDirs = [p.srcSet.output.resourcesDir]
+                    verify.dependencyClasspath = p.srcSet.runtimeClasspath
+                    verify.dependsOn p.strip
+                    if (JitterUtil.verifyInlinedConstants()) {
+                        verify.dependsOn project.tasks.findByName(
+                                "jitterVerifyInlinedConstants${cap}")
+                    }
+
+                    // the stripped runtime artifact: replaces the full jar
+                    // as the outgoing runtime variant, so consumers resolve
+                    // the flavour model at runtime while compiling against
+                    // the full classes
+                    def strippedJar = project.tasks.create(
+                            p.name == 'main' ? 'jitterJar' : "jitter${cap}Jar",
+                            org.gradle.api.tasks.bundling.Jar) {
+                        group = JitterUtil.GROUP
+                        // the deliverable lane: what a build job picks up
+                        // from build/libs is always the flavour model
+                        destinationDirectory = new File(project.buildDir, 'libs')
+                        // no removal manifest in the deliverable: it lists the
+                        // flavour specific classes of the full model - the
+                        // verification reads it from the stripped tree instead
+                        from(p.strip.outputDir) {
+                            exclude 'META-INF/jitter/**'
+                        }
+                        from(p.srcSet.output.resourcesDir)
+                        dependsOn p.strip, project.tasks.named(p.srcSet.processResourcesTaskName)
+                    }
+                    strippedJar.dependsOn verify
+                    def fullJar = project.tasks.findByName(p.name == 'main' ? 'jar' : "${p.name}Jar")
+                    if (fullJar != null) {
+                        // the stripped twin takes over the full jar's former
+                        // published coordinates - the flavour model keeps the
+                        // plain name of the deliverable - while the 150% model
+                        // moves to a 'full' classifier. Both are outgoing
+                        // artifacts of the same component (api vs runtime
+                        // variant), so they must not share the published
+                        // coordinates: a Maven publication rejects two
+                        // artifacts with the same extension and classifier
+                        def fullClassifier = fullJar.archiveClassifier.get()
+                        strippedJar.archiveClassifier.set(fullClassifier)
+                        fullJar.archiveClassifier.set(
+                                fullClassifier.isEmpty() ? 'full' : "${fullClassifier}-full")
+                        // the 150% model moves to its own lane
+                        fullJar.destinationDirectory = new File(project.buildDir, 'full-libs')
+                    }
+                    def runtimeElements = project.configurations.findByName(
+                            p.name == 'main' ? 'runtimeElements' : "${p.name}RuntimeElements")
+                    if (runtimeElements != null) {
+                        runtimeElements.outgoing.artifacts.removeIf { true }
+                        runtimeElements.outgoing.artifact(strippedJar)
+                    } else if (p.name != 'main') {
+                        JitterUtil.log().warn("jitter: the packaging source set '{}' has no '{}RuntimeElements'"
+                                + " configuration - its stripped runtime artifact is built but no consumer"
+                                + " resolves it", p.name, p.name)
+                    }
+
+                    if (p.name == 'main') {
+                        def warTask = project.tasks.findByName('war')
+                        if (warTask != null) {
+                            // the stripped classes are their own copy spec
+                            // under WEB-INF/classes, not a plain classpath
+                            // entry: only a scoped source allows the
+                            // removal manifest to be excluded - the
+                            // deliverable must not carry it, it lists the
+                            // flavour specific classes of the full model
+                            warTask.classpath = project.files(p.srcSet.output.resourcesDir,
+                                    project.configurations.runtimeClasspath)
+                            warTask.webInf.into('classes') {
+                                from(p.strip.outputDir) {
+                                    exclude 'META-INF/jitter/**'
+                                }
+                            }
+                            warTask.dependsOn verify
+                        }
+                    }
+                }
+
+                // the api source sets: the full compiled classes stay the
+                // compile artifact (<name>ApiElements), the stripped jar of
+                // the packaging trees plus their own tree replaces the
+                // outgoing <name>RuntimeElements variant, so that code which
+                // runs against the deployed flavour model sees the same
+                // @Alter/@Fork/@OnlyIf transformations as the application
+                roles.api.each { name ->
+                    def strip = project.tasks.findByName("jitterStrip${name.capitalize()}")
+                    def srcSet = project.sourceSets.findByName(name)
+                    if (strip == null || strip.outputDir == null) {
+                        return
+                    }
+                    def cap = name.capitalize()
+                    def content = packagingSets.collect { it } + [[name: name, srcSet: srcSet, strip: strip]]
+                    def contentStrips = content.collect { it.strip }
+                    def contentSrcSets = content.collect { it.srcSet }
+
+                    // the scoped verify of the api artifact: checks the
+                    // stripped trees of its content against their removals
+                    // and the removals of the flavour dependencies, so the
+                    // artifact task fails early on dangling references
+                    def verify = project.task("jitterVerify${cap}", type: JitterVerifyTask)
+                    verify.stripTasks = contentStrips
+                    verify.allClassesDirs = contentStrips.collect { it.outputDir }
+                    verify.allResourcesDirs = contentSrcSets.collect { it.output.resourcesDir }
+                    verify.dependencyClasspath = contentSrcSets.collect { it.runtimeClasspath }
+                            .inject { a, b -> a + b } ?: project.files()
+                    verify.dependsOn contentStrips
+                    if (JitterUtil.verifyInlinedConstants()) {
+                        contentSrcSets.each { s ->
+                            verify.dependsOn project.tasks.findByName(
+                                    "jitterVerifyInlinedConstants${s.name.capitalize()}")
+                        }
+                    }
+
+                    def strippedApiJar = project.tasks.create("jitter${cap}Jar",
+                            org.gradle.api.tasks.bundling.Jar) {
+                        group = JitterUtil.GROUP
+                        // the deliverable lane, like the stripped runtime jar
+                        destinationDirectory = new File(project.buildDir, 'libs')
+                        // the trees may carry the same package-info;
+                        // first (packaging) wins, like the old jar. No
+                        // removal manifests in the deliverable - see the
+                        // stripped runtime jar above
+                        duplicatesStrategy = org.gradle.api.file.DuplicatesStrategy.EXCLUDE
+                        contentStrips.each { s ->
+                            from(s.outputDir) {
+                                exclude 'META-INF/jitter/**'
+                            }
+                        }
+                        contentSrcSets.each { s -> from(s.output.resourcesDir) }
+                        dependsOn contentStrips
+                    }
+                    strippedApiJar.dependsOn verify
+                    contentSrcSets.each { s ->
+                        strippedApiJar.dependsOn project.tasks.named(s.processResourcesTaskName)
+                    }
+                    def fullApiJar = project.tasks.findByName("${name}Jar")
+                    if (fullApiJar != null) {
+                        // the stripped api jar takes over the full jar's
+                        // former published coordinates, the 150% model moves
+                        // to a '<classifier>-full' classifier - both are
+                        // outgoing artifacts of the same component and must
+                        // not collide in a Maven publication (see the
+                        // packaging source sets above)
+                        def fullApiClassifier = fullApiJar.archiveClassifier.get()
+                        strippedApiJar.archiveClassifier.set(fullApiClassifier)
+                        fullApiJar.archiveClassifier.set(
+                                fullApiClassifier.isEmpty() ? 'full' : "${fullApiClassifier}-full")
+                        // the 150% model moves to its own lane, like the
+                        // full jar of a packaging source set above
+                        fullApiJar.destinationDirectory = new File(project.buildDir, 'full-libs')
+                    }
+                    def apiRuntime = project.configurations.findByName("${name}RuntimeElements")
+                    if (apiRuntime != null) {
+                        apiRuntime.outgoing.artifacts.removeIf { true }
+                        apiRuntime.outgoing.artifact(strippedApiJar)
+                    } else {
+                        JitterUtil.log().warn("jitter: the api source set '{}' has no '{}RuntimeElements'"
+                                + " configuration - its stripped runtime artifact is built but no consumer"
+                                + " resolves it", name, name)
+                    }
+                }
+
+                def verifyTask = project.task("jitterVerify", type: JitterVerifyTask)
+                verifyTask.stripTasks = stripTasks
+                verifyTask.allClassesDirs = allClassesDirs
+                verifyTask.allResourcesDirs = allResourcesDirs
+                verifyTask.dependencyClasspath = manifestClasspath
+                verifyTask.dependsOn stripTasks
+
+                // the tests run against the stripped flavour model of their
+                // source sets - the aggregate verify must have checked that
+                // model before anything executes: without this dependency,
+                // dangling references of test-like source sets surface only
+                // when the aggregate task runs on demand, not in the test run
+                project.tasks.withType(Test).configureEach { testTask ->
+                    testTask.dependsOn verifyTask
+                }
+
+                // the whole build in one go, the build server's entry point:
+                // every module's verification, including the source level
+                // inlined constants check - invoking this task IS the opt-in,
+                // no system property needed. The task lives on the root
+                // project, created by whichever module applies the plugin
+                // first, and grows with every module that applies it
+                def verifyAll = project.rootProject.tasks.findByName("jitterVerifyAll")
+                if (verifyAll == null) {
+                    verifyAll = project.rootProject.tasks.create("jitterVerifyAll")
+                    verifyAll.group = JitterUtil.GROUP
+                    verifyAll.description = "Verifies the whole build in one go:" +
+                            " the stripped models of every module and the inlined" +
+                            " constant usages of every source set. Run it with the" +
+                            " flavour task of the build server's flavour, e.g." +
+                            " 'gradle flavourNASA jitterVerifyAll'."
+                }
+                verifyAll.dependsOn verifyTask
+                verifyAll.dependsOn inlinedConstantsTasks
+
+                // the source level verification of the @InlinedConstantApproved
+                // usages parses all sources, so it is deliberately opt-in:
+                // off in the everyday build (the marker is the review
+                // decision), on with the jitter.verifyInlinedConstants
+                // system property. The tasks stay invocable directly, and
+                // the aggregate task runs them all in one go
+                if (JitterUtil.verifyInlinedConstants()) {
+                    verifyTask.dependsOn inlinedConstantsTasks
+                }
+                project.task("jitterVerifyInlinedConstants") {
+                    group = JitterUtil.GROUP
+                    dependsOn inlinedConstantsTasks
+                }
+
+                // the aggregate dejittering of the project: one task for all
+                // source sets, like the aggregate verify
+                project.task("dejitter") {
+                    group = JitterUtil.GROUP
+                    dependsOn dejitterTasks
+                }
+
+                project.tasks.withType(Test).configureEach { it.dependsOn verifyTask }
+                project.tasks.withType(JavaExec).configureEach { it.dependsOn verifyTask }
+            }
+        })
+
 
         project.afterEvaluate({
             project.jitter.flavours.each { fl ->
@@ -70,6 +412,12 @@ class JitterPlugin implements Plugin<Project>  {
                         throw new IllegalArgumentException("Flavour '${fl.name}' contains a critical term with an invalid regular expression '$p': ${e.getLocalizedMessage()}")
                     }
                 }
+            }
+            // the scan covers the stripped trees of the project, so the
+            // stripping must run first: without the dependency the scan
+            // would report the stripped trees of a previous flavour run
+            project.tasks.withType(AbstractCriticalTermsTask).configureEach {
+                it.dependsOn project.tasks.withType(JitterStripTask)
             }
             project.task("reportCriticalTerms", type:ReportCriticalTermsTask)
             project.task("verifyCriticalTerms", type:VerifyCriticalTermsTask)
@@ -98,6 +446,46 @@ class JitterPlugin implements Plugin<Project>  {
         if (selected != null) {
             System.setProperty(FLAVOUR_PROP, selected.substring('flavour'.length()))
         }
+    }
+
+    /**
+     * Resolves the roles of the project's source sets:
+     * {@code packagingSrcSets} - their stripped model is the module's runtime
+     * artifact - and {@code apiSrcSets} - their full classes stay the compile
+     * artifact, the stripped model is the runtime artifact for consumers.
+     * Every source set that carries neither role is test-like: the stripped
+     * model is its runtime identity.
+     *
+     * <p>Names that are no source set of the project are ignored, like
+     * excluded source sets - the defaults name the conventional {@code main}
+     * and {@code testFixtures} sets, which may well not exist in a given
+     * project. A name that is neither a source set nor excluded nor one of
+     * the conventional defaults is reported: most likely a typo in a custom
+     * layout. A source set must not carry both roles.
+     */
+    private static Map sourceSetRoles(final Project project) {
+        def packaging = new HashSet<String>()
+        def api = new HashSet<String>()
+        def conventional = ['main', 'testFixtures'] as Set
+        def resolve = { String name, Set<String> role, String roleProperty ->
+            if (project.sourceSets.findByName(name) == null) {
+                if (!project.jitter.excludeSrcSets.contains(name) && !conventional.contains(name)) {
+                    JitterUtil.log().warn("jitter: {} names the unknown source set '{}', ignored",
+                            roleProperty, name)
+                }
+            } else {
+                role.add(name)
+            }
+        }
+        project.jitter.packagingSrcSets.each { resolve(it, packaging, 'packagingSrcSets') }
+        project.jitter.apiSrcSets.each { resolve(it, api, 'apiSrcSets') }
+        final def overlap = packaging.intersect(api)
+        if (!overlap.isEmpty()) {
+            throw new GradleException(
+                    "jitter: the source sets ${overlap} are both packagingSrcSets and apiSrcSets,"
+                            + " but a source set carries exactly one role")
+        }
+        return [packaging: packaging, api: api]
     }
 
 }

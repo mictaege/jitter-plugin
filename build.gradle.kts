@@ -11,7 +11,12 @@ plugins {
 }
 
 group = "io.github.mictaege"
-version = "2026.2"
+version = "2026.3-rc10"
+
+// the jitter-api version the plugin is built against: also the version the
+// functional test fixtures resolve, read from the generated test resource
+// (see generateTestResources) - no test pins a hand bumped version
+val jitterApiVersion = "2026.3-rc8"
 
 gradlePlugin {
     website.set("https://github.com/mictaege/jitter-plugin")
@@ -22,7 +27,7 @@ gradlePlugin {
             displayName = "Jitter Plugin"
             description = "The jitter-plugin is a Gradle plugin to build and distribute different flavours of an application from a single source base."
             implementationClass = "com.github.mictaege.jitter.plugin.JitterPlugin"
-            tags.set(listOf("spoon"))
+            tags.set(listOf("flavours", "flavors", "variants", "bytecode", "asm"))
         }
     }
 }
@@ -38,16 +43,24 @@ repositories {
 
 dependencies {
     implementation(gradleApi())
-    implementation("io.github.mictaege:spoon-gradle-plugin:2026.2")
-    implementation("io.github.mictaege:jitter-api:2026.2")
+    implementation("io.github.mictaege:jitter-api:$jitterApiVersion")
     implementation("com.google.guava:guava:33.4.8-jre")
-    implementation("org.eclipse.jdt:org.eclipse.jdt.core:3.39.0")
+    implementation("org.ow2.asm:asm:9.10.1")
+    implementation("org.ow2.asm:asm-commons:9.10.1")
+    implementation("org.ow2.asm:asm-tree:9.10.1")
+    implementation("com.github.javaparser:javaparser-core:3.28.2")
+    // the Kotlin PSI for dejittering Kotlin sources; compile only: the jar
+    // is resolved lazily at dejitter time and loaded in an isolated
+    // classloader, a runtime dependency would pollute the classpath of
+    // Kotlin based builds (their Gradle plugin clashes with it)
+    compileOnly("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
     testImplementation(platform("org.junit:junit-bom:5.12.2"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testImplementation("org.junit.jupiter:junit-jupiter-engine")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.12.2")
     testImplementation("org.hamcrest:hamcrest:3.0")
     testImplementation("org.mockito:mockito-core:5.17.0")
+    testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
 }
 
 tasks.register("generateResources") {
@@ -61,6 +74,21 @@ tasks.register("generateResources") {
 
 tasks.processResources {
     from(files(tasks.getByName("generateResources")))
+}
+
+// the jitter-api version for the functional test fixtures: read through
+// JitterApi.version(), so a version bump is a single line in this file
+tasks.register("generateTestResources") {
+    val propFile = file("$buildDir/generated-test/jitter-api.properties")
+    outputs.file(propFile)
+    doLast {
+        mkdir(propFile.parentFile)
+        propFile.writeText("jitter.api.version=$jitterApiVersion")
+    }
+}
+
+tasks.processTestResources {
+    from(files(tasks.getByName("generateTestResources")))
 }
 
 tasks.test {
