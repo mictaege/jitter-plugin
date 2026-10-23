@@ -7,6 +7,8 @@
 
 A simple but complete example how _jitter_ works could be found at [eval.jitter](https://github.com/mictaege/eval.jitter). It's strongly recommended to check out this repository and to have also a closer look on the examples provided there.
 
+The design decisions behind the bytecode stripping and their rationale are recorded in [docs/design.md](docs/design.md) - worth reading before changing the stripper, the verification or the dejittering.
+
 ## Table of contents
 
 - [Problem](#problem)
