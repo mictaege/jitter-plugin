@@ -221,8 +221,15 @@ class JitterPlugin implements Plugin<Project>  {
                         // artifacts of the same component (api vs runtime
                         // variant), so they must not share the published
                         // coordinates: a Maven publication rejects two
-                        // artifacts with the same extension and classifier
+                        // artifacts with the same extension and classifier.
+                        // The stripped twin takes over the full jar's former
+                        // name COMPLETELY - base name AND classifier: jars of
+                        // custom api source sets may carry their identity in
+                        // the base name (a plain classifier transfer would
+                        // make the stripped twin fall back to the project
+                        // name and collide with the main stripped jar)
                         def fullClassifier = fullJar.archiveClassifier.get()
+                        strippedJar.archiveBaseName.set(fullJar.archiveBaseName)
                         strippedJar.archiveClassifier.set(fullClassifier)
                         fullJar.archiveClassifier.set(
                                 fullClassifier.isEmpty() ? 'full' : "${fullClassifier}-full")
@@ -328,8 +335,14 @@ class JitterPlugin implements Plugin<Project>  {
                         // to a '<classifier>-full' classifier - both are
                         // outgoing artifacts of the same component and must
                         // not collide in a Maven publication (see the
-                        // packaging source sets above)
+                        // packaging source sets above). The stripped api jar
+                        // takes over the full jar's former name COMPLETELY -
+                        // base name AND classifier: a custom api source set
+                        // may carry its jar's identity in the base name, and
+                        // a plain classifier transfer would collide with the
+                        // main stripped jar of the project
                         def fullApiClassifier = fullApiJar.archiveClassifier.get()
+                        strippedApiJar.archiveBaseName.set(fullApiJar.archiveBaseName)
                         strippedApiJar.archiveClassifier.set(fullApiClassifier)
                         fullApiJar.archiveClassifier.set(
                                 fullApiClassifier.isEmpty() ? 'full' : "${fullApiClassifier}-full")
