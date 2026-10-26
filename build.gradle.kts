@@ -11,12 +11,12 @@ plugins {
 }
 
 group = "io.github.mictaege"
-version = "2026.3-rc10"
+version = "2026.3"
 
 // the jitter-api version the plugin is built against: also the version the
 // functional test fixtures resolve, read from the generated test resource
 // (see generateTestResources) - no test pins a hand bumped version
-val jitterApiVersion = "2026.3-rc8"
+val jitterApiVersion = "2026.3"
 
 gradlePlugin {
     website.set("https://github.com/mictaege/jitter-plugin")

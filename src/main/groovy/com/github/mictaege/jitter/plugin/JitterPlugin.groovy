@@ -43,7 +43,9 @@ class JitterPlugin implements Plugin<Project>  {
             def inlinedConstantsTasks = []
             def dejitterTasks = []
             def allClassesDirs = [] as Set
+            def rawClassesSrcSets = []
             def allResourcesDirs = [] as Set
+            def scannedResourcesSrcSets = []
             def manifestClasspath = project.files()
 
             project.sourceSets.all { srcSet ->
@@ -151,11 +153,13 @@ class JitterPlugin implements Plugin<Project>  {
                     }
                 } else {
                     allClassesDirs.addAll(srcSet.output.classesDirs.files)
+                    rawClassesSrcSets << srcSet
                 }
                 // for the stale resource report of the aggregate verify
                 if (!project.jitter.excludeSrcSets.contains(srcSet.name)
                         && srcSet.output.resourcesDir != null) {
                     allResourcesDirs.add(srcSet.output.resourcesDir)
+                    scannedResourcesSrcSets << srcSet
                 }
             }
 
@@ -181,7 +185,7 @@ class JitterPlugin implements Plugin<Project>  {
                     verify.allClassesDirs = [p.strip.outputDir]
                     verify.allResourcesDirs = [p.srcSet.output.resourcesDir]
                     verify.dependencyClasspath = p.srcSet.runtimeClasspath
-                    verify.dependsOn p.strip
+                    verify.dependsOn p.strip, project.tasks.named(p.srcSet.processResourcesTaskName)
                     if (JitterUtil.verifyInlinedConstants()) {
                         verify.dependsOn project.tasks.findByName(
                                 "jitterVerifyInlinedConstants${cap}")
@@ -217,8 +221,15 @@ class JitterPlugin implements Plugin<Project>  {
                         // artifacts of the same component (api vs runtime
                         // variant), so they must not share the published
                         // coordinates: a Maven publication rejects two
-                        // artifacts with the same extension and classifier
+                        // artifacts with the same extension and classifier.
+                        // The stripped twin takes over the full jar's former
+                        // name COMPLETELY - base name AND classifier: jars of
+                        // custom api source sets may carry their identity in
+                        // the base name (a plain classifier transfer would
+                        // make the stripped twin fall back to the project
+                        // name and collide with the main stripped jar)
                         def fullClassifier = fullJar.archiveClassifier.get()
+                        strippedJar.archiveBaseName.set(fullJar.archiveBaseName)
                         strippedJar.archiveClassifier.set(fullClassifier)
                         fullJar.archiveClassifier.set(
                                 fullClassifier.isEmpty() ? 'full' : "${fullClassifier}-full")
@@ -285,6 +296,9 @@ class JitterPlugin implements Plugin<Project>  {
                     verify.dependencyClasspath = contentSrcSets.collect { it.runtimeClasspath }
                             .inject { a, b -> a + b } ?: project.files()
                     verify.dependsOn contentStrips
+                    contentSrcSets.each { s ->
+                        verify.dependsOn project.tasks.named(s.processResourcesTaskName)
+                    }
                     if (JitterUtil.verifyInlinedConstants()) {
                         contentSrcSets.each { s ->
                             verify.dependsOn project.tasks.findByName(
@@ -321,8 +335,14 @@ class JitterPlugin implements Plugin<Project>  {
                         // to a '<classifier>-full' classifier - both are
                         // outgoing artifacts of the same component and must
                         // not collide in a Maven publication (see the
-                        // packaging source sets above)
+                        // packaging source sets above). The stripped api jar
+                        // takes over the full jar's former name COMPLETELY -
+                        // base name AND classifier: a custom api source set
+                        // may carry its jar's identity in the base name, and
+                        // a plain classifier transfer would collide with the
+                        // main stripped jar of the project
                         def fullApiClassifier = fullApiJar.archiveClassifier.get()
+                        strippedApiJar.archiveBaseName.set(fullApiJar.archiveBaseName)
                         strippedApiJar.archiveClassifier.set(fullApiClassifier)
                         fullApiJar.archiveClassifier.set(
                                 fullApiClassifier.isEmpty() ? 'full' : "${fullApiClassifier}-full")
@@ -347,6 +367,20 @@ class JitterPlugin implements Plugin<Project>  {
                 verifyTask.allResourcesDirs = allResourcesDirs
                 verifyTask.dependencyClasspath = manifestClasspath
                 verifyTask.dependsOn stripTasks
+                // the aggregate verify consumes the outputs of other
+                // producing tasks: the classes of the test-like and excluded
+                // source sets as they are, and the resources of every scanned
+                // source set for the stale resource report. Since those
+                // directories are task inputs, Gradle's implicit dependency
+                // validation requires the declared dependencies - and the
+                // verification must see the CURRENT classes and resources,
+                // not whatever a previous build left behind
+                rawClassesSrcSets.each { ss ->
+                    verifyTask.dependsOn ss.output.buildDependencies
+                }
+                scannedResourcesSrcSets.each { ss ->
+                    verifyTask.dependsOn project.tasks.named(ss.processResourcesTaskName)
+                }
 
                 // the tests run against the stripped flavour model of their
                 // source sets - the aggregate verify must have checked that
