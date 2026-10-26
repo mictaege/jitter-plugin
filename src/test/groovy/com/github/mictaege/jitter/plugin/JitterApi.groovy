@@ -12,7 +12,7 @@ final class JitterApi {
         super()
     }
 
-    /** The plain version, e.g. {@code 2026.3-rc8}. */
+    /** The plain version, e.g. {@code 2026.3}. */
     static String version() {
         final def properties = new Properties()
         final def inStream = JitterApi.classLoader.getResourceAsStream('jitter-api.properties')
@@ -25,7 +25,7 @@ final class JitterApi {
         properties.getProperty('jitter.api.version')
     }
 
-    /** The dependency notation, e.g. {@code io.github.mictaege:jitter-api:2026.3-rc8}. */
+    /** The dependency notation, e.g. {@code io.github.mictaege:jitter-api:2026.3}. */
     static String dependency() {
         "io.github.mictaege:jitter-api:${version()}"
     }
