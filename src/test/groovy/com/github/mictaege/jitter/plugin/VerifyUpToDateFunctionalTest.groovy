@@ -111,6 +111,38 @@ class VerifyUpToDateFunctionalTest {
         assertThat(report.text, containsString('app/Gated.properties'))
     }
 
+    @Test
+    void verifiesTheAsIsClassesOfExcludedSourceSetsWithDeclaredDependencies() {
+        // main is excluded from the stripping, so the aggregate verify scans
+        // its classes as they are - the raw classes dirs are task inputs and
+        // the outputs of the compile task in the same build graph: Gradle's
+        // implicit dependency validation requires the declared dependency,
+        // the build failed with "uses this output of task ':compileJava'
+        // without declaring an explicit or implicit dependency" before
+        write('build.gradle', """
+            plugins {
+                id 'java'
+                id 'io.github.mictaege.jitter-plugin'
+            }
+            repositories {
+                mavenCentral()
+            }
+            dependencies {
+                implementation '${JitterApi.dependency()}'
+            }
+            jitter {
+                flavour { name = 'A' }
+                flavour { name = 'B' }
+                excludeSrcSets = ['main']
+            }
+        """)
+
+        final BuildResult result = run('flavourA', 'clean', 'jitterVerify', 'compileJava')
+
+        assertThat(result.task(':jitterVerify').outcome, is(TaskOutcome.SUCCESS))
+        assertThat(result.task(':compileJava').outcome, is(TaskOutcome.SUCCESS))
+    }
+
     private BuildResult run(String... args) {
         GradleRunner.create()
                 .withProjectDir(prj.toFile())
