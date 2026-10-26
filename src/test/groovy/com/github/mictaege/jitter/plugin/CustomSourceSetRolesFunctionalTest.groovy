@@ -13,8 +13,10 @@ import java.util.zip.ZipFile
 
 import static org.hamcrest.MatcherAssert.assertThat
 import static org.hamcrest.Matchers.containsString
+import static org.hamcrest.Matchers.endsWith
 import static org.hamcrest.Matchers.is
 import static org.hamcrest.Matchers.not
+import static org.hamcrest.Matchers.notNullValue
 import static org.hamcrest.Matchers.nullValue
 
 /**
@@ -78,6 +80,11 @@ class CustomSourceSetRolesFunctionalTest {
                 .substring('RUNTIME_ARTIFACT: '.length()).trim()
         assertThat(artifact, containsString("build${File.separator}libs"))
         assertThat(artifact, not(containsString('full-libs')))
+        // the stripped twin keeps the full jar's identity COMPLETELY - the
+        // base name of the custom api jar as well: a plain classifier
+        // transfer made it fall back to the project name and collide with
+        // the main stripped jar, two tasks writing the same file
+        assertThat(artifact, endsWith('lib-sharedFixtures.jar'))
         // the runtime artifact is the deliverable: no removal manifest
         // inside, it would list the flavour specific classes of the full
         // model. The verification of the build reads the manifest from
@@ -85,7 +92,9 @@ class CustomSourceSetRolesFunctionalTest {
         final File jarFile = new File(artifact)
         assertThat(jarFile.exists(), is(true))
         try (def zip = new ZipFile(jarFile)) {
-            assertThat(zip.getEntry('META-INF/jitter/sharedFixtures-removed.txt'), is(nullValue()))
+            // the jar is the stripped SHARED FIXTURES model, not the main
+            // model the collision made it look like before
+            assertThat(zip.getEntry('lib/Fixture.class'), is(notNullValue()))
         }
         final File manifest = new File(jarFile.getParentFile().getParentFile(),
                 'jitter-stripped/sharedFixtures/META-INF/jitter/sharedFixtures-removed.txt')
