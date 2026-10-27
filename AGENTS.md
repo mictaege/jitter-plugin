@@ -50,7 +50,7 @@ example/demo consumer of this plugin.
   `package-info.java` for its flavour gate (`package-info.kt` is a possible later feature).
 
 ## Working conventions
-- Read [`docs/design.md`](docs/design.md) before changing the stripper, the verification or the
+- Read [`docs/bytecode_stripping.md`](docs/bytecode_stripping.md) before changing the stripper, the verification or the
   dejittering: it records the design decisions and their rationale, so a decision is not
   accidentally undone or re-litigated. Change it together with the code when a decision changes.
 - Run `./gradlew test` before submitting changes; for end-to-end validation build and run

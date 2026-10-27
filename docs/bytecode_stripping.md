@@ -1,4 +1,4 @@
-# Design decisions
+# Bytecode-Stripping Design decisions
 
 This document records the design decisions behind the jitter bytecode
 stripping and the reasoning that led to them - the *why*, not the *what*:
