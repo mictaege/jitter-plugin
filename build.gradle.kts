@@ -54,10 +54,10 @@ dependencies {
     // classloader, a runtime dependency would pollute the classpath of
     // Kotlin based builds (their Gradle plugin clashes with it)
     compileOnly("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
-    testImplementation(platform("org.junit:junit-bom:5.14.4"))
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testImplementation("org.junit.jupiter:junit-jupiter-engine")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.14.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
     testImplementation("org.hamcrest:hamcrest:3.0")
     testImplementation("org.mockito:mockito-core:5.24.0")
     testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
@@ -96,8 +96,8 @@ tasks.test {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
     withJavadocJar()
     withSourcesJar()
 }
