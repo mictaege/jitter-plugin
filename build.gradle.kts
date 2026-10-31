@@ -5,9 +5,9 @@ plugins {
     groovy
     `java-gradle-plugin`
     `maven-publish`
-    id("com.gradle.plugin-publish") version "1.2.1"
+    id("com.gradle.plugin-publish") version "2.2.1"
     signing
-    id("org.jreleaser") version "1.18.0"
+    id("org.jreleaser") version "1.27.0"
 }
 
 group = "io.github.mictaege"
@@ -33,7 +33,7 @@ gradlePlugin {
 }
 
 tasks.wrapper {
-    gradleVersion = "9.8.0"
+    gradleVersion = "9.8.2"
     distributionType = Wrapper.DistributionType.ALL
 }
 
@@ -44,22 +44,22 @@ repositories {
 dependencies {
     implementation(gradleApi())
     implementation("io.github.mictaege:jitter-api:$jitterApiVersion")
-    implementation("com.google.guava:guava:33.4.8-jre")
-    implementation("org.ow2.asm:asm:9.10.1")
-    implementation("org.ow2.asm:asm-commons:9.10.1")
-    implementation("org.ow2.asm:asm-tree:9.10.1")
+    implementation("com.google.guava:guava:33.7.2-jre")
+    implementation("org.ow2.asm:asm:9.11.1")
+    implementation("org.ow2.asm:asm-commons:9.11.1")
+    implementation("org.ow2.asm:asm-tree:9.11.1")
     implementation("com.github.javaparser:javaparser-core:3.28.2")
     // the Kotlin PSI for dejittering Kotlin sources; compile only: the jar
     // is resolved lazily at dejitter time and loaded in an isolated
     // classloader, a runtime dependency would pollute the classpath of
     // Kotlin based builds (their Gradle plugin clashes with it)
     compileOnly("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
-    testImplementation(platform("org.junit:junit-bom:5.12.2"))
+    testImplementation(platform("org.junit:junit-bom:5.14.4"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testImplementation("org.junit.jupiter:junit-jupiter-engine")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.12.2")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.14.4")
     testImplementation("org.hamcrest:hamcrest:3.0")
-    testImplementation("org.mockito:mockito-core:5.17.0")
+    testImplementation("org.mockito:mockito-core:5.24.0")
     testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
 }
 
