@@ -408,7 +408,9 @@ public final class KotlinUsageFinder implements AutoCloseable {
             }
             final String field = selectorOf(dotted);
             final String receiver = dotted.getReceiverExpression().getText();
-            if (field == null || receiver.contains("(")) {
+            if (field == null || receiver.contains("(") || receiver.contains(":")) {
+                // '(' marks a call receiver, ':' a class literal receiver
+                // like VersionInfo::class - neither carries a constant usage
                 continue;
             }
             for (final String candidate : candidatesFor(receiver, ctx)) {
