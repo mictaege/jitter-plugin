@@ -1,0 +1,32 @@
+schema: spec-driven
+
+context: |
+  jitter-plugin is a Gradle plugin to build and distribute different flavours of an application
+  from a single source base — a code-level alternative to forking, feature toggles or
+  preprocessors. The complete application ("150% model") compiles untouched; flavour-specific
+  code is removed from the compiled classes by post-compile bytecode stripping (ASM), based on
+  the annotations from jitter-api. A verification pass fails the build if surviving code still
+  references removed code; source-level dejittering produces a flavour's source variant.
+
+  Family: integration point of the jitter family (store `jitter`, ~/openspec/jitter, use
+  `openspec ... --store jitter`); depends on jitter-api for the annotation contract; eval.jitter
+  is the reference demo consumer (composite-builds this plugin from the sibling checkout).
+
+  Stack: mixed Groovy (plugin/task wiring, src/main/groovy) and Java (stripper/verifier/
+  dejitterer, src/main/java); tests in src/test/java (unit) and src/test/groovy (TestKit
+  functional). Gradle Kotlin DSL, java-gradle-plugin; build via ./gradlew. Deps: jitter-api, ASM
+  (asm/asm-tree/asm-commons), javaparser, Guava; the Kotlin compiler for Kotlin dejittering is
+  resolved lazily at task runtime in an isolated classloader — never a runtime dependency.
+  Plugin id registered in src/main/resources/META-INF/gradle-plugins; generated properties
+  expose plugin/jitter-api versions. Published via com.gradle.plugin-publish (Portal) and
+  org.jreleaser (Maven Central, io.github.mictaege). License Apache-2.0.
+
+  Conventions for changes:
+  - Run ./gradlew test before submitting; for end-to-end validation build/run eval.jitter with
+    each flavour (no publishing needed).
+  - Coordinate version bumps with jitter-api.
+  - Design decisions live in the openspec specs (converted from the former docs/bytecode_stripping.md)
+    — change spec and code together when a decision changes.
+
+  Capability specs in openspec/specs/: stripping, verification, inlined-constants, resource-gates,
+  dejittering, gradle-tasks. AGENTS.md maps areas to specs. User-facing docs: README.md.
