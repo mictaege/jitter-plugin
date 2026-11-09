@@ -1,5 +1,8 @@
 # AGENTS.md — jitter-plugin
 
+> New to the jitter family? Read the onboarding guide in the family store first:
+> https://github.com/mictaege/jitter-openspec (README.md).
+
 Project context and conventions live in OpenSpec: `openspec/config.yaml` (project context) and
 `openspec/specs/<capability>/spec.md` (capability specs). Use the OpenSpec workflow for behavior
 changes: propose via `/openspec-propose`, implement via `/openspec-apply-change`, validate with
