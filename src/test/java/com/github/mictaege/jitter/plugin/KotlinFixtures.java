@@ -38,6 +38,16 @@ final class KotlinFixtures {
      * stdlib are on it).
      */
     static Path compileKotlin(final Path workDir, final String... nameAndSourcePairs) throws IOException {
+        return compileKotlin(workDir, null, nameAndSourcePairs);
+    }
+
+    /**
+     * Same as {@link #compileKotlin(Path, String...)}, with an additional
+     * classpath entry - for fixtures that compile against a previously
+     * compiled dependency module.
+     */
+    static Path compileKotlin(final Path workDir, final Path extraClasspath,
+                              final String... nameAndSourcePairs) throws IOException {
         if (nameAndSourcePairs.length % 2 != 0) {
             throw new IllegalArgumentException("expected name/source pairs");
         }
@@ -52,7 +62,8 @@ final class KotlinFixtures {
         }
         final List<String> options = new ArrayList<>();
         options.add("-cp");
-        options.add(System.getProperty("java.class.path"));
+        options.add(System.getProperty("java.class.path")
+                + (extraClasspath == null ? "" : ":" + extraClasspath));
         options.add("-d");
         options.add(classes.toString());
         options.add("-jvm-target");

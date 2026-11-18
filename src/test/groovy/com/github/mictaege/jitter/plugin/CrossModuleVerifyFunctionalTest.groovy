@@ -261,6 +261,110 @@ class CrossModuleVerifyFunctionalTest {
     }
 
     @Test
+    void shouldStripSwitchMapEntriesOfRemovedProducerEnumConstants() {
+        write('lib/src/main/java/lib/Port.java', """
+            package lib;
+
+            import com.github.mictaege.jitter.api.OnlyIf;
+
+            public enum Port {
+
+                BASE,
+
+                @OnlyIf("B")
+                GATED_B
+            }
+        """)
+        write('app/src/main/java/app/App.java', """
+            package app;
+
+            import lib.Port;
+
+            public class App {
+
+                public String portName(final Port port) {
+                    switch (port) {
+                        case BASE:
+                            return "base";
+                        case GATED_B:
+                            return "gated";
+                        default:
+                            return "other";
+                    }
+                }
+            }
+        """)
+
+        def result = run('flavourA', ':app:jitterStripMain', ':app:jitterVerifyMain')
+
+        assertThat(result.task(':app:jitterStripMain').outcome, is(TaskOutcome.SUCCESS))
+        assertThat(result.task(':app:jitterVerifyMain').outcome, is(TaskOutcome.SUCCESS))
+        // the producer's strip ran first: its removal manifest is an input
+        // of the consumer's strip task
+        assertThat(result.task(':lib:jitterStripMain') != null, is(true))
+        assertThat(result.task(':lib:jitterStripMain').outcome, is(TaskOutcome.SUCCESS))
+        // the stripped switch map no longer names the removed constant -
+        // neither in the instructions nor in the constant pool
+        def switchMap = prj.resolve('app/build/jitter-stripped/main/app/App$1.class').toFile()
+        assertThat(switchMap.isFile(), is(true))
+        def content = new String(switchMap.readBytes(), java.nio.charset.StandardCharsets.ISO_8859_1)
+        assertThat(content, not(containsString('GATED_B')))
+        assertThat(content, containsString('BASE'))
+        assertThat(result.output, containsString('jitter: Remove switch map entry lib.Port#GATED_B'))
+    }
+
+    @Test
+    void shouldStripTestLikeSourceSetsWithoutDependingOnTheirOwnOutput() {
+        write('lib/src/main/java/lib/Port.java', """
+            package lib;
+
+            import com.github.mictaege.jitter.api.OnlyIf;
+
+            public enum Port {
+
+                BASE,
+
+                @OnlyIf("B")
+                GATED_B
+            }
+        """)
+        write('app/src/test/java/app/AppTest.java', """
+            package app;
+
+            import lib.Port;
+
+            public class AppTest {
+
+                public String portName(final Port port) {
+                    switch (port) {
+                        case BASE:
+                            return "base";
+                        case GATED_B:
+                            return "gated";
+                        default:
+                            return "other";
+                    }
+                }
+            }
+        """)
+
+        // the test source set's runtime classpath carries its own stripped
+        // tree: the strip task must exclude its own manifest, otherwise it
+        // would depend on its own output (task cycle)
+        def result = run('flavourA', ':app:jitterStripTest')
+
+        assertThat(result.task(':app:jitterStripTest').outcome, is(TaskOutcome.SUCCESS))
+        // the own main stripped tree is a same-build dependency: its strip
+        // ran first and its manifest is an input
+        assertThat(result.task(':app:jitterStripMain') != null, is(true))
+        assertThat(result.task(':app:jitterStripMain').outcome, is(TaskOutcome.SUCCESS))
+        def switchMap = prj.resolve('app/build/jitter-stripped/test/app/AppTest$1.class').toFile()
+        assertThat(switchMap.isFile(), is(true))
+        def content = new String(switchMap.readBytes(), java.nio.charset.StandardCharsets.ISO_8859_1)
+        assertThat(content, not(containsString('GATED_B')))
+    }
+
+    @Test
     void shouldFailOnDirectFieldAccessToRemovedProducerEnumConstant() {
         write('lib/src/main/java/lib/Port.java', """
             package lib;

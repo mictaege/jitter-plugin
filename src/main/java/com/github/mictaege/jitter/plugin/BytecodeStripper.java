@@ -107,7 +107,27 @@ public final class BytecodeStripper {
                              final List<java.io.File> templateClasspath,
                              final List<String> flavours)
             throws IOException {
+        return strip(sourceDirs, targetDir, templateClasspath, flavours,
+                java.util.Collections.emptySet());
+    }
+
+    /**
+     * Same as {@link #strip(List, Path, List, List)}, with the members that
+     * the flavour dependencies of the stripped module removed (read from
+     * their removal manifests), as {@code owner.name+descriptor} keys. The
+     * synthetic switch map / when map cleanup drops the entries of such
+     * cross-module removed enum constants as well, so their names do not
+     * leak into this module's stripped artifact.
+     */
+    public StripResult strip(final List<Path> sourceDirs, final Path targetDir,
+                             final List<java.io.File> templateClasspath,
+                             final List<String> flavours,
+                             final java.util.Set<String> crossModuleRemovedMembers)
+            throws IOException {
         final StripContext ctx = new StripContext(templateClasspath, flavours);
+        if (crossModuleRemovedMembers != null) {
+            ctx.crossModuleRemovedMembers.addAll(crossModuleRemovedMembers);
+        }
 
         for (final Path dir : sourceDirs) {
             ClassIndex.loadClasses(dir, ctx.nodes, ctx.paths, ctx.result);
@@ -128,6 +148,7 @@ public final class BytecodeStripper {
         SyntheticSweeper.cleanDeserializeLambda(ctx);
         SyntheticSweeper.removeOrphanedSynthetics(ctx);
         SyntheticSweeper.cleanSwitchMaps(ctx);
+        SyntheticSweeper.cleanKotlinWhenMaps(ctx);
         SyntheticSweeper.cleanNestAttributes(ctx);
         // the paranoia scan: no placeholder anchor survives in the code
         AlterConstApplier.verifyNoPlaceholdersLeft(ctx);

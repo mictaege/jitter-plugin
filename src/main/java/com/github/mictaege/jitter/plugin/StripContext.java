@@ -45,6 +45,16 @@ final class StripContext {
      */
     final Map<String, List<String[]>> removedLambdas = new HashMap<>();
 
+    /**
+     * The members removed by the flavour dependencies of this module, read
+     * from their removal manifests, as {@code owner.name+descriptor} keys -
+     * the cross-module input of the switch map / when map cleanup: entries
+     * of synthetic map classes that reference such a constant are removed
+     * as well, so the stripped artifact does not leak the names of enum
+     * constants another module's flavour removed.
+     */
+    final Set<String> crossModuleRemovedMembers = new HashSet<>();
+
     StripContext(final List<File> templateClasspath) {
         this(templateClasspath, java.util.Collections.emptyList());
     }

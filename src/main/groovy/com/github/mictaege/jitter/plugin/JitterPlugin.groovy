@@ -58,6 +58,14 @@ class JitterPlugin implements Plugin<Project>  {
                     def stripTask = project.task("jitterStrip${srcSet.name.capitalize()}", type: JitterStripTask)
                     stripTask.classesDirs = srcSet.output.classesDirs.files
                     stripTask.templateClasspath = srcSet.compileClasspath
+                    // the runtime classpath carries the removal manifests of the
+                    // flavour dependencies (their stripped trees of the same
+                    // build), so the strip can drop switch map entries of
+                    // cross-module removed enum constants
+                    stripTask.dependencyClasspath = srcSet.runtimeClasspath
+                    // run after the producers' strip tasks: their manifests
+                    // are read as input
+                    stripTask.dependsOnSiblingStripTasks()
                     stripTask.flavourNames = project.jitter.flavours.collect { it.name }
                     stripTask.dependsOn srcSet.compileJavaTaskName
                     stripTask.manifestName = srcSet.name
