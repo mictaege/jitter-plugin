@@ -65,6 +65,14 @@ class JitterPlugin implements Plugin<Project>  {
 
                     stripTask.outputDir = new File(project.buildDir, "jitter-stripped/${srcSet.name}")
 
+                    // the @kotlin.Metadata rewrite of stripped Kotlin classes
+                    // resolves kotlin-metadata-jvm lazily from the
+                    // repositories of the applying build and loads it in an
+                    // isolated classloader - deliberately no runtime
+                    // dependency of the plugin, like the Kotlin PSI
+                    stripTask.kotlinMetadataJars = project.configurations.detachedConfiguration(
+                            project.dependencies.create(JitterUtil.KOTLIN_METADATA_JVM))
+
                     // the source level verification of the @InlinedConstantApproved
                     // usages: javac has inlined them, so the bytecode based
                     // reference verification cannot see them; this check

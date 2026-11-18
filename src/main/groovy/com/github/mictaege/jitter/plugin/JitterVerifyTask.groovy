@@ -119,6 +119,10 @@ class JitterVerifyTask extends DefaultTask {
         readSiblingManifests(removedClasses, removedMembers)
 
         def violations = ReferenceVerifier.findDanglingReferences(allClassesDirs, removedClasses, removedMembers)
+        // the @kotlin.Metadata payload of surviving Kotlin classes: the
+        // references live only as strings inside the annotation, the code
+        // level check above cannot see them
+        def metadataViolations = MetadataVerifier.findMetadataViolations(allClassesDirs, removedClasses, removedMembers)
 
         if (!errors.isEmpty()) {
             throw new GradleException("jitter: stripping failed:\n  " + errors.join("\n  "))
@@ -128,6 +132,12 @@ class JitterVerifyTask extends DefaultTask {
                     "jitter: the build contains references to flavour specific code"
                             + " that is not part of the active flavour:\n  "
                             + violations.join("\n  "))
+        }
+        if (!metadataViolations.isEmpty()) {
+            throw new GradleException(
+                    "jitter: the @kotlin.Metadata of surviving classes still references"
+                            + " flavour specific code that is not part of the active flavour:\n  "
+                            + metadataViolations.join("\n  "))
         }
         reportStaleResources(removedClasses)
     }

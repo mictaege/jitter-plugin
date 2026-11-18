@@ -58,6 +58,16 @@ class JitterStripTask extends DefaultTask {
     FileCollection templateClasspath
 
     /**
+     * The kotlin-metadata-jvm jars of the @kotlin.Metadata rewrite of
+     * stripped Kotlin classes, resolved lazily: it is no runtime dependency
+     * of the plugin (it would clash with the Kotlin toolchain of Kotlin
+     * based builds), so the jars load in an isolated classloader only when
+     * Kotlin classes are actually stripped.
+     */
+    @Internal
+    FileCollection kotlinMetadataJars
+
+    /**
      * The names of all flavours of the project: the constant audit tells a
      * flavour-variant @OnlyIf gate from a gate that covers all flavours.
      */
@@ -76,6 +86,7 @@ class JitterStripTask extends DefaultTask {
     @TaskAction
     void run() {
         def stripper = new BytecodeStripper()
+        stripper.kotlinMetadataJars = kotlinMetadataJars == null ? [] : kotlinMetadataJars.files as List
         def templateClasspathFiles = templateClasspath == null ? [] : templateClasspath.files as List
         // the stripped tree is written as a whole: clean the output of a
         // previous run first

@@ -1,5 +1,8 @@
 package com.github.mictaege.jitter.plugin;
 
+import org.objectweb.asm.tree.ClassNode;
+
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
@@ -30,6 +33,19 @@ import java.util.Map;
  * this package.
  */
 public final class BytecodeStripper {
+
+    private List<File> kotlinMetadataJars = List.of();
+
+    /**
+     * @param kotlinMetadataJars the resolved files of kotlin-metadata-jvm,
+     *        including its dependencies: the {@code @kotlin.Metadata} rewrite
+     *        of stripped Kotlin classes loads it in an isolated classloader.
+     *        Without jars the library must already be on the classpath, like
+     *        in the tests.
+     */
+    public void setKotlinMetadataJars(final List<File> kotlinMetadataJars) {
+        this.kotlinMetadataJars = kotlinMetadataJars == null ? List.of() : kotlinMetadataJars;
+    }
 
     /**
      * Strips all class files of the given directory (in place) and
@@ -116,9 +132,40 @@ public final class BytecodeStripper {
         // the paranoia scan: no placeholder anchor survives in the code
         AlterConstApplier.verifyNoPlaceholdersLeft(ctx);
         AnnotationCleaner.clean(ctx);
+        // the @kotlin.Metadata of stripped Kotlin classes must match the
+        // stripped bytecode - rewritten after all removal phases
+        rewriteKotlinMetadata(ctx);
 
         ClassFileWriter.writeBack(sourceDirs, targetDir, ctx);
         return ctx.result;
+    }
+
+    /**
+     * Rewrites the {@code @kotlin.Metadata} of the stripped Kotlin classes so
+     * the metadata matches the stripped bytecode. Skipped when no class
+     * carries the annotation - builds without Kotlin sources pay nothing.
+     */
+    private void rewriteKotlinMetadata(final StripContext ctx) throws IOException {
+        boolean anyKotlin = false;
+        for (final ClassNode node : ctx.nodes.values()) {
+            if (node.visibleAnnotations != null
+                    && node.visibleAnnotations.stream()
+                            .anyMatch(a -> "Lkotlin/Metadata;".equals(a.desc))) {
+                anyKotlin = true;
+                break;
+            }
+        }
+        if (!anyKotlin) {
+            return;
+        }
+        final KotlinMetadataRewriter rewriter = kotlinMetadataJars.isEmpty()
+                ? new JvmKotlinMetadataRewriter()
+                : new IsolatedKotlinMetadataRewriter(kotlinMetadataJars);
+        try {
+            rewriter.rewrite(ctx.nodes, ctx.result, ctx.dirty);
+        } finally {
+            rewriter.close();
+        }
     }
 
 }

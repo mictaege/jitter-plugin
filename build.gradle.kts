@@ -54,6 +54,10 @@ dependencies {
     // classloader, a runtime dependency would pollute the classpath of
     // Kotlin based builds (their Gradle plugin clashes with it)
     compileOnly("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
+    // the Kotlin metadata model for the @kotlin.Metadata rewrite of stripped
+    // Kotlin classes; compile only like the compiler embeddable: resolved
+    // lazily at strip time and loaded in an isolated classloader
+    compileOnly("org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.21")
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testImplementation("org.junit.jupiter:junit-jupiter-engine")
@@ -61,6 +65,7 @@ dependencies {
     testImplementation("org.hamcrest:hamcrest:3.0")
     testImplementation("org.mockito:mockito-core:5.24.0")
     testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
+    testImplementation("org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.21")
 }
 
 tasks.register("generateResources") {
