@@ -34,11 +34,11 @@ The design decisions behind the bytecode stripping and their rationale are recor
 - [Verification of critical terms](#verification-of-critical-terms)
 
 > <details>
-> <summary><b>Important notes!!! With release 2026.3 the Spoon source transformation is gone, jitter strips bytecode now</b></summary>
+> <summary><b>Important notes!!! With release 2026.4 the Spoon source transformation is gone, jitter strips bytecode now</b></summary>
 > 
 > ## The transformation moved from sources to class files
 > 
-> Until 2026.3 the flavour model was produced by transforming the Java sources with Spoon before compilation. 2026.3 compiles the complete 150% model untouched and removes the flavour-specific code from the compiled classes with bytecode analysis (ASM):
+> Until 2026.4 the flavour model was produced by transforming the Java sources with Spoon before compilation. 2026.4 compiles the complete 150% model untouched and removes the flavour-specific code from the compiled classes with bytecode analysis (ASM):
 > 
 > - works with every language that compiles to JVM bytecode (Java, Kotlin, Groovy) and every javac syntax level - the stripper couples to the class file format, not the source syntax
 > - the sources are never touched: line number tables of surviving code stay intact, hot code replacement works, the debugger resolves to the original sources
