@@ -214,6 +214,65 @@ public class KotlinDejittererTest {
         assertThat(text, not(containsString("Fork")));
     }
 
+    /**
+     * Issue mictaege/jitter-plugin#49: the active entry of repeated @Fork
+     * annotations is not necessarily the first one - dejittering for the
+     * second flavour must fork with the second entry's template.
+     */
+    @Test
+    void forksTheMethodBodyOfTheSecondRepeatedForkEntry() throws Exception {
+        write("com/example/FlavourProvider.kt", repeatedForkSource());
+
+        final StripResult result = dejitter("Nasa");
+
+        final String text = read("com/example/FlavourProvider.kt");
+        assertThat(text, containsString("fun determineFlavour(): String = \"nasa\""));
+        assertThat(text, not(containsString("throw IllegalArgumentException")));
+        assertThat(text, not(containsString("determineFlavourEsa")));
+        assertThat(text, not(containsString("determineFlavourNasa")));
+        assertThat(text, not(containsString("Fork")));
+        assertThat(text, not(containsString("OnlyIf")));
+        assertThat(result.getInfos().stream()
+                .anyMatch(i -> i.contains("Replace body of determineFlavour with determineFlavourNasa")), is(true));
+    }
+
+    @Test
+    void forksTheMethodBodyOfTheFirstRepeatedForkEntry() throws Exception {
+        write("com/example/FlavourProvider.kt", repeatedForkSource());
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("com/example/FlavourProvider.kt");
+        assertThat(text, containsString("fun determineFlavour(): String = \"esa\""));
+        assertThat(text, not(containsString("throw IllegalArgumentException")));
+        assertThat(text, not(containsString("determineFlavourEsa")));
+        assertThat(text, not(containsString("determineFlavourNasa")));
+        assertThat(text, not(containsString("Fork")));
+        assertThat(text, not(containsString("OnlyIf")));
+        assertThat(result.getInfos().stream()
+                .anyMatch(i -> i.contains("Replace body of determineFlavour with determineFlavourEsa")), is(true));
+    }
+
+    private String repeatedForkSource() {
+        return "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.Fork\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "class FlavourProvider {\n"
+                + "    @Fork(to = \"determineFlavourEsa\", ifActive = \"Esa\")\n"
+                + "    @Fork(to = \"determineFlavourNasa\", ifActive = \"Nasa\")\n"
+                + "    fun determineFlavour(): String {\n"
+                + "        throw IllegalArgumentException(\"unknown flavour\")\n"
+                + "    }\n"
+                + "\n"
+                + "    @OnlyIf(\"Esa\")\n"
+                + "    private fun determineFlavourEsa(): String = \"esa\"\n"
+                + "\n"
+                + "    @OnlyIf(\"Nasa\")\n"
+                + "    private fun determineFlavourNasa(): String = \"nasa\"\n"
+                + "}\n";
+    }
+
     @Test
     void altersTheClassOfTheActiveFlavour() throws Exception {
         write("com/example/TableNames.kt",
@@ -242,6 +301,158 @@ public class KotlinDejittererTest {
         assertThat(result.getRemovedClasses(), is(Set.of("com/example/EsaTableNames")));
         assertThat(result.getKeptSourceClasses(), is(Set.of("com/example/TableNames")));
         assertThat(result.getInfos().stream().anyMatch(i -> i.contains("Replace class TableNames with EsaTableNames")), is(true));
+    }
+
+    /**
+     * Like repeated @Fork: the active entry of repeated @Alter annotations is
+     * not necessarily the first one.
+     */
+    @Test
+    void altersTheClassOfTheSecondRepeatedAlterEntry() throws Exception {
+        write("com/example/TableNames.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.Alter\n"
+                + "@Alter(ifActive = \"Esa\", with = \"EsaTableNames\")\n"
+                + "@Alter(ifActive = \"Nasa\", with = \"NasaTableNames\")\n"
+                + "class TableNames {\n"
+                + "    val job = \"none\"\n"
+                + "}\n");
+        write("com/example/EsaTableNames.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "@OnlyIf(\"Esa\")\n"
+                + "class EsaTableNames {\n"
+                + "    val job = \"esa\"\n"
+                + "}\n");
+        write("com/example/NasaTableNames.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "@OnlyIf(\"Nasa\")\n"
+                + "class NasaTableNames {\n"
+                + "    val job = \"nasa\"\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Nasa");
+
+        assertThat(Files.exists(out.resolve("com/example/EsaTableNames.kt")), is(false));
+        assertThat(Files.exists(out.resolve("com/example/NasaTableNames.kt")), is(false));
+        final String text = read("com/example/TableNames.kt");
+        assertThat(text, containsString("class TableNames {"));
+        assertThat(text, containsString("val job = \"nasa\""));
+        assertThat(text, not(containsString("EsaTableNames")));
+        assertThat(text, not(containsString("NasaTableNames")));
+        assertThat(text, not(containsString("Alter")));
+        assertThat(result.getRemovedClasses(),
+                is(Set.of("com/example/EsaTableNames", "com/example/NasaTableNames")));
+        assertThat(result.getKeptSourceClasses(), is(Set.of("com/example/TableNames")));
+        assertThat(result.getInfos().stream()
+                .anyMatch(i -> i.contains("Replace class TableNames with NasaTableNames")), is(true));
+    }
+
+    /**
+     * The explicit container form of a repeatable annotation in Kotlin
+     * source: the nested entries are call expressions of the container's
+     * collection literal argument.
+     */
+    @Test
+    void forksTheMethodBodyFromAnExplicitGatewayContainer() throws Exception {
+        write("com/example/Gate.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.Fork\n"
+                + "import com.github.mictaege.jitter.api.Gateway\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "class Gate {\n"
+                + "    @Gateway([\n"
+                + "        Fork(ifActive = \"Esa\", to = \"flavouredEsa\"),\n"
+                + "        Fork(ifActive = \"Nasa\", to = \"flavouredNasa\")\n"
+                + "    ])\n"
+                + "    fun flavour(): String = \"none\"\n"
+                + "\n"
+                + "    @OnlyIf(\"Esa\")\n"
+                + "    private fun flavouredEsa(): String = \"esa\"\n"
+                + "\n"
+                + "    @OnlyIf(\"Nasa\")\n"
+                + "    private fun flavouredNasa(): String = \"nasa\"\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Nasa");
+
+        final String text = read("com/example/Gate.kt");
+        assertThat(text, containsString("fun flavour(): String = \"nasa\""));
+        assertThat(text, not(containsString("flavouredEsa")));
+        assertThat(text, not(containsString("flavouredNasa")));
+        assertThat(text, not(containsString("Gateway")));
+        assertThat(text, not(containsString("Fork")));
+        assertThat(result.getInfos().stream()
+                .anyMatch(i -> i.contains("Replace body of flavour with flavouredNasa")), is(true));
+    }
+
+    @Test
+    void altersTheClassFromAnExplicitAlternativesContainer() throws Exception {
+        write("com/example/TableNames.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.Alter\n"
+                + "import com.github.mictaege.jitter.api.Alternatives\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "@Alternatives([\n"
+                + "    Alter(ifActive = \"Esa\", with = \"EsaTableNames\"),\n"
+                + "    Alter(ifActive = \"Nasa\", with = \"NasaTableNames\")\n"
+                + "])\n"
+                + "class TableNames {\n"
+                + "    val job = \"none\"\n"
+                + "}\n");
+        write("com/example/NasaTableNames.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "@OnlyIf(\"Nasa\")\n"
+                + "class NasaTableNames {\n"
+                + "    val job = \"nasa\"\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Nasa");
+
+        assertThat(Files.exists(out.resolve("com/example/NasaTableNames.kt")), is(false));
+        final String text = read("com/example/TableNames.kt");
+        assertThat(text, containsString("class TableNames {"));
+        assertThat(text, containsString("val job = \"nasa\""));
+        assertThat(text, not(containsString("Alternatives")));
+        assertThat(text, not(containsString("Alter")));
+        assertThat(result.getRemovedClasses(), is(Set.of("com/example/NasaTableNames")));
+        assertThat(result.getKeptSourceClasses(), is(Set.of("com/example/TableNames")));
+    }
+
+    @Test
+    void flattensAlterConstValuesFromAnExplicitContainer() throws Exception {
+        write("com/example/TableNames.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValue\n"
+                + "import com.github.mictaege.jitter.api.AlterConstValues\n"
+                + "import com.github.mictaege.jitter.api.InlinedConstantApproved\n"
+                + "class TableNames {\n"
+                + "  companion object {\n"
+                + "    @AlterConstValues([\n"
+                + "      AlterConstValue(ifActive = \"Esa\", with = \"ESA_JOB\"),\n"
+                + "      AlterConstValue(ifActive = \"Nasa\", with = \"NASA_JOB\")\n"
+                + "    ])\n"
+                + "    @InlinedConstantApproved\n"
+                + "    const val JOB: String = \"com.example.TableNames.JOB\"\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Nasa");
+
+        final String text = read("com/example/TableNames.kt");
+        assertThat(text, containsString("const val JOB: String = \"NASA_JOB\""));
+        assertThat(text, not(containsString("AlterConstValue")));
+        assertThat(text, not(containsString("ESA_JOB")));
+        assertThat(result.getErrors().isEmpty(), is(true));
     }
 
     /**

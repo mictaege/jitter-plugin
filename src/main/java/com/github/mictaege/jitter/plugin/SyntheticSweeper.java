@@ -199,93 +199,133 @@ final class SyntheticSweeper {
      * initialize entries for enum constants that were removed in the active
      * flavour. Such an entry is unreachable by definition - a case label for
      * a constant that no longer exists cannot match - but it would surface
-     * as a dangling reference. The entry and its NoSuchFieldError handler are
-     * removed. Entries for constants of other modules are left untouched;
-     * the handler tolerates them at runtime.
+     * as a dangling reference and, worse, leak the removed constant's name
+     * into the stripped artifact's constant pool. The entry and its
+     * NoSuchFieldError handler are removed. A constant counts as removed
+     * when this strip run removed it OR when a flavour dependency's removal
+     * manifest reports it ({@link StripContext#crossModuleRemovedMembers}) -
+     * the cross-module case is exactly the leak of issue #50.
      */
     static void cleanSwitchMaps(final StripContext ctx) {
         for (final ClassNode node : ctx.nodes.values()) {
             if (node.fields.stream().noneMatch(f -> f.name.startsWith("$SwitchMap$"))) {
                 continue;
             }
-            final MethodNode clinit = node.methods.stream()
-                    .filter(m -> m.name.equals("<clinit>"))
-                    .findFirst().orElse(null);
-            if (clinit == null) {
+            cleanMapEntries(ctx, node, "switch map", SyntheticSweeper::isSwitchMapLoad);
+        }
+    }
+
+    /**
+     * The Kotlin twin of the javac switch map: kotlinc emits an
+     * {@code Outer$WhenMappings} class with {@code int[] $EnumSwitchMapping$N}
+     * fields whose {@code <clinit>} references every enum constant used in a
+     * {@code when} of the outer class, each entry wrapped in a
+     * {@code NoSuchFieldError} handler. The entry shape is the javac one
+     * except that the map is held in a local variable ({@code ALOAD}) instead
+     * of a {@code GETSTATIC $SwitchMap$} field. Entries of removed constants -
+     * same-module or reported by a flavour dependency's removal manifest - are
+     * removed the same way, so their names do not leak into the stripped
+     * artifact.
+     */
+    static void cleanKotlinWhenMaps(final StripContext ctx) {
+        for (final ClassNode node : ctx.nodes.values()) {
+            if (node.fields.stream().noneMatch(f -> f.name.startsWith("$EnumSwitchMapping$"))) {
                 continue;
             }
-            final List<AbstractInsnNode> insns = new ArrayList<>();
-            clinit.instructions.forEach(insns::add);
-            for (int k = 0; k < insns.size(); k++) {
-                final AbstractInsnNode insn = insns.get(k);
-                if (!(insn instanceof FieldInsnNode)) {
-                    continue;
-                }
-                final FieldInsnNode constant = (FieldInsnNode) insn;
-                if (constant.getOpcode() != Opcodes.GETSTATIC
-                        || !ctx.result.getRemovedMembers().contains(
-                                StripResult.memberKey(constant.owner, constant.name, constant.desc))) {
-                    continue;
-                }
-                // The entry has the javac shape (stack map frames and line
-                // number nodes may be mixed in):
-                //   GETSTATIC map, GETSTATIC constant, INVOKEVIRTUAL ordinal,
-                //   int push, IASTORE, try end label, GOTO, handler label, ASTORE
-                // The walk starts at the map load before the constant.
-                final int mapIdx = prevReal(insns, k - 1);
-                final int ordinalIdx = nextReal(insns, k + 1);
-                final int pushIdx = nextReal(insns, ordinalIdx + 1);
-                final int storeIdx = nextReal(insns, pushIdx + 1);
-                final int tryEndIdx = nextReal(insns, storeIdx + 1);
-                final int gotoIdx = nextReal(insns, tryEndIdx + 1);
-                final int handlerIdx = nextReal(insns, gotoIdx + 1);
-                final int excStoreIdx = nextReal(insns, handlerIdx + 1);
-                if (mapIdx < 0 || excStoreIdx >= insns.size()) {
-                    ctx.result.error("Could not remove the switch map entry of "
-                            + constant.owner.replace('/', '.') + "#" + constant.name + " in "
-                            + node.name.replace('/', '.') + " automatically");
-                    continue;
-                }
-                final AbstractInsnNode mapLoad = insns.get(mapIdx);
-                final AbstractInsnNode ordinal = insns.get(ordinalIdx);
-                final AbstractInsnNode push = insns.get(pushIdx);
-                final AbstractInsnNode store = insns.get(storeIdx);
-                final AbstractInsnNode tryEnd = insns.get(tryEndIdx);
-                final AbstractInsnNode gotoInsn = insns.get(gotoIdx);
-                final AbstractInsnNode handler = insns.get(handlerIdx);
-                final AbstractInsnNode excStore = insns.get(excStoreIdx);
-                final boolean javacShape = mapLoad instanceof FieldInsnNode
-                        && ((FieldInsnNode) mapLoad).getOpcode() == Opcodes.GETSTATIC
-                        && ((FieldInsnNode) mapLoad).name.startsWith("$SwitchMap$")
-                        && ordinal instanceof MethodInsnNode
-                        && ((MethodInsnNode) ordinal).name.equals("ordinal")
-                        && isIntPush(push)
-                        && store.getOpcode() == Opcodes.IASTORE
-                        && tryEnd instanceof org.objectweb.asm.tree.LabelNode
-                        && gotoInsn.getOpcode() == Opcodes.GOTO
-                        && handler instanceof org.objectweb.asm.tree.LabelNode
-                        && isAstoreN(excStore);
-                if (!javacShape) {
-                    ctx.result.error("Could not remove the switch map entry of "
-                            + constant.owner.replace('/', '.') + "#" + constant.name + " in "
-                            + node.name.replace('/', '.') + " automatically");
-                    continue;
-                }
-                final int tryStartIdx = prevReal(insns, mapIdx - 1);
-                final boolean labeledTryStart = tryStartIdx >= 0
-                        && insns.get(tryStartIdx) instanceof org.objectweb.asm.tree.LabelNode;
-                if (labeledTryStart) {
-                    clinit.tryCatchBlocks.removeIf(block ->
-                            block.start == insns.get(tryStartIdx) && block.handler == handler);
-                }
-                for (int r = mapIdx; r <= excStoreIdx; r++) {
-                    clinit.instructions.remove(insns.get(r));
-                }
-                ctx.result.info("Remove switch map entry " + constant.owner.replace('/', '.')
-                        + "#" + constant.name + " from " + node.name.replace('/', '.'));
-                ctx.dirty.add(node.name);
-                k = excStoreIdx;
+            cleanMapEntries(ctx, node, "when map", SyntheticSweeper::isWhenMapLoad);
+        }
+    }
+
+    private static boolean isSwitchMapLoad(final AbstractInsnNode insn) {
+        return insn instanceof FieldInsnNode
+                && ((FieldInsnNode) insn).getOpcode() == Opcodes.GETSTATIC
+                && ((FieldInsnNode) insn).name.startsWith("$SwitchMap$");
+    }
+
+    private static boolean isWhenMapLoad(final AbstractInsnNode insn) {
+        return insn instanceof org.objectweb.asm.tree.VarInsnNode
+                && insn.getOpcode() == Opcodes.ALOAD;
+    }
+
+    private static void cleanMapEntries(final StripContext ctx, final ClassNode node,
+                                        final String mapKind,
+                                        final java.util.function.Predicate<AbstractInsnNode> mapLoadOk) {
+        final MethodNode clinit = node.methods.stream()
+                .filter(m -> m.name.equals("<clinit>"))
+                .findFirst().orElse(null);
+        if (clinit == null) {
+            return;
+        }
+        final List<AbstractInsnNode> insns = new ArrayList<>();
+        clinit.instructions.forEach(insns::add);
+        for (int k = 0; k < insns.size(); k++) {
+            final AbstractInsnNode insn = insns.get(k);
+            if (!(insn instanceof FieldInsnNode)) {
+                continue;
             }
+            final FieldInsnNode constant = (FieldInsnNode) insn;
+            final String key = StripResult.memberKey(constant.owner, constant.name, constant.desc);
+            if (constant.getOpcode() != Opcodes.GETSTATIC
+                    || (!ctx.result.getRemovedMembers().contains(key)
+                        && !ctx.crossModuleRemovedMembers.contains(key))) {
+                continue;
+            }
+            // The entry has the compiler shape (stack map frames and line
+            // number nodes may be mixed in):
+            //   map load, GETSTATIC constant, INVOKEVIRTUAL ordinal,
+            //   int push, IASTORE, try end label, GOTO, handler label, ASTORE
+            // The walk starts at the map load before the constant.
+            final int mapIdx = prevReal(insns, k - 1);
+            final int ordinalIdx = nextReal(insns, k + 1);
+            final int pushIdx = nextReal(insns, ordinalIdx + 1);
+            final int storeIdx = nextReal(insns, pushIdx + 1);
+            final int tryEndIdx = nextReal(insns, storeIdx + 1);
+            final int gotoIdx = nextReal(insns, tryEndIdx + 1);
+            final int handlerIdx = nextReal(insns, gotoIdx + 1);
+            final int excStoreIdx = nextReal(insns, handlerIdx + 1);
+            if (mapIdx < 0 || excStoreIdx >= insns.size()) {
+                ctx.result.error("Could not remove the " + mapKind + " entry of "
+                        + constant.owner.replace('/', '.') + "#" + constant.name + " in "
+                        + node.name.replace('/', '.') + " automatically");
+                continue;
+            }
+            final AbstractInsnNode mapLoad = insns.get(mapIdx);
+            final AbstractInsnNode ordinal = insns.get(ordinalIdx);
+            final AbstractInsnNode push = insns.get(pushIdx);
+            final AbstractInsnNode store = insns.get(storeIdx);
+            final AbstractInsnNode tryEnd = insns.get(tryEndIdx);
+            final AbstractInsnNode gotoInsn = insns.get(gotoIdx);
+            final AbstractInsnNode handler = insns.get(handlerIdx);
+            final AbstractInsnNode excStore = insns.get(excStoreIdx);
+            final boolean compilerShape = mapLoadOk.test(mapLoad)
+                    && ordinal instanceof MethodInsnNode
+                    && ((MethodInsnNode) ordinal).name.equals("ordinal")
+                    && isIntPush(push)
+                    && store.getOpcode() == Opcodes.IASTORE
+                    && tryEnd instanceof org.objectweb.asm.tree.LabelNode
+                    && gotoInsn.getOpcode() == Opcodes.GOTO
+                    && handler instanceof org.objectweb.asm.tree.LabelNode
+                    && isAstoreN(excStore);
+            if (!compilerShape) {
+                ctx.result.error("Could not remove the " + mapKind + " entry of "
+                        + constant.owner.replace('/', '.') + "#" + constant.name + " in "
+                        + node.name.replace('/', '.') + " automatically");
+                continue;
+            }
+            final int tryStartIdx = prevReal(insns, mapIdx - 1);
+            final boolean labeledTryStart = tryStartIdx >= 0
+                    && insns.get(tryStartIdx) instanceof org.objectweb.asm.tree.LabelNode;
+            if (labeledTryStart) {
+                clinit.tryCatchBlocks.removeIf(block ->
+                        block.start == insns.get(tryStartIdx) && block.handler == handler);
+            }
+            for (int r = mapIdx; r <= excStoreIdx; r++) {
+                clinit.instructions.remove(insns.get(r));
+            }
+            ctx.result.info("Remove " + mapKind + " entry " + constant.owner.replace('/', '.')
+                    + "#" + constant.name + " from " + node.name.replace('/', '.'));
+            ctx.dirty.add(node.name);
+            k = excStoreIdx;
         }
     }
 

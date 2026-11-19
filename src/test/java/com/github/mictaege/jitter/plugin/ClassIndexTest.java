@@ -54,6 +54,21 @@ public class ClassIndexTest extends StripperTestFixture {
     }
 
     @Test
+    void shouldIgnoreCandidatesThatAreNoValidClassFilePaths() throws Exception {
+        // a Kotlin class literal receiver (Foo::class) reaches the lookup as
+        // an internal name with a ':' - on Windows Path.resolve throws the
+        // unchecked InvalidPathException there; the lookup must return null
+        // on every platform instead of crashing the task
+        final Path classes = workDir.resolve("classes");
+        Files.createDirectories(classes);
+
+        assertThat(ClassIndex.entryOf(List.of(classes.toFile()), "test/Outer$Foo::class"),
+                is(nullValue()));
+        assertThat(ClassIndex.loadFromClasspath(List.of(classes.toFile()), "test/Outer$Foo::class",
+                new StripResult()), is(nullValue()));
+    }
+
+    @Test
     void shouldLoadTemplatesFromDirectoryClasspathEntries() throws Exception {
         final Path classes = compile("test/Template.java",
                 "package test;\n"

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -94,9 +95,14 @@ final class ClassIndex {
         }
         for (final File entry : classpath) {
             try {
+                final Path file = classFileOf(entry, internalName);
+                if (file == null) {
+                    // not a valid class file path at all (e.g. a class
+                    // literal receiver like `Foo::class`): no entry can
+                    // contain it, continue with the next entry
+                    continue;
+                }
                 if (entry.isDirectory()) {
-                    final Path file = entry.toPath().resolve(
-                            internalName.replace('/', File.separatorChar) + ".class");
                     if (Files.isRegularFile(file)) {
                         return entry;
                     }
@@ -115,14 +121,30 @@ final class ClassIndex {
     }
 
     /**
+     * The class file path of the given internal name within the given
+     * classpath entry, or null if the name cannot form a valid path - on
+     * Windows {@code Path.resolve} throws the unchecked
+     * {@link InvalidPathException} for characters like the ':' of a Kotlin
+     * class literal ({@code Foo::class}); such a candidate is simply no
+     * class on the classpath
+     */
+    private static Path classFileOf(final File entry, final String internalName) {
+        try {
+            return entry.toPath().resolve(
+                    internalName.replace('/', File.separatorChar) + ".class");
+        } catch (final InvalidPathException e) {
+            return null;
+        }
+    }
+
+    /**
      * The bytecode of the given class from one specific classpath entry,
      * or null if the entry does not contain it.
      */
     static byte[] readFromEntry(final File entry, final String internalName) throws IOException {
         if (entry.isDirectory()) {
-            final Path file = entry.toPath().resolve(
-                    internalName.replace('/', File.separatorChar) + ".class");
-            if (!Files.isRegularFile(file)) {
+            final Path file = classFileOf(entry, internalName);
+            if (file == null || !Files.isRegularFile(file)) {
                 return null;
             }
             return Files.readAllBytes(file);

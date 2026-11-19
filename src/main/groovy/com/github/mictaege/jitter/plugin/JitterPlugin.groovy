@@ -58,12 +58,28 @@ class JitterPlugin implements Plugin<Project>  {
                     def stripTask = project.task("jitterStrip${srcSet.name.capitalize()}", type: JitterStripTask)
                     stripTask.classesDirs = srcSet.output.classesDirs.files
                     stripTask.templateClasspath = srcSet.compileClasspath
+                    // the runtime classpath carries the removal manifests of the
+                    // flavour dependencies (their stripped trees of the same
+                    // build), so the strip can drop switch map entries of
+                    // cross-module removed enum constants
+                    stripTask.dependencyClasspath = srcSet.runtimeClasspath
+                    // run after the producers' strip tasks: their manifests
+                    // are read as input
+                    stripTask.dependsOnSiblingStripTasks()
                     stripTask.flavourNames = project.jitter.flavours.collect { it.name }
                     stripTask.dependsOn srcSet.compileJavaTaskName
                     stripTask.manifestName = srcSet.name
                     stripTasks << stripTask
 
                     stripTask.outputDir = new File(project.buildDir, "jitter-stripped/${srcSet.name}")
+
+                    // the @kotlin.Metadata rewrite of stripped Kotlin classes
+                    // resolves kotlin-metadata-jvm lazily from the
+                    // repositories of the applying build and loads it in an
+                    // isolated classloader - deliberately no runtime
+                    // dependency of the plugin, like the Kotlin PSI
+                    stripTask.kotlinMetadataJars = project.configurations.detachedConfiguration(
+                            project.dependencies.create(JitterUtil.KOTLIN_METADATA_JVM))
 
                     // the source level verification of the @InlinedConstantApproved
                     // usages: javac has inlined them, so the bytecode based

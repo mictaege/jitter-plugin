@@ -5,18 +5,18 @@ plugins {
     groovy
     `java-gradle-plugin`
     `maven-publish`
-    id("com.gradle.plugin-publish") version "1.2.1"
+    id("com.gradle.plugin-publish") version "2.2.1"
     signing
-    id("org.jreleaser") version "1.18.0"
+    id("org.jreleaser") version "1.27.0"
 }
 
 group = "io.github.mictaege"
-version = "2026.3"
+version = "2026.4"
 
 // the jitter-api version the plugin is built against: also the version the
 // functional test fixtures resolve, read from the generated test resource
 // (see generateTestResources) - no test pins a hand bumped version
-val jitterApiVersion = "2026.3"
+val jitterApiVersion = "2026.4"
 
 gradlePlugin {
     website.set("https://github.com/mictaege/jitter-plugin")
@@ -33,7 +33,7 @@ gradlePlugin {
 }
 
 tasks.wrapper {
-    gradleVersion = "9.8.0"
+    gradleVersion = "9.8.2"
     distributionType = Wrapper.DistributionType.ALL
 }
 
@@ -44,23 +44,28 @@ repositories {
 dependencies {
     implementation(gradleApi())
     implementation("io.github.mictaege:jitter-api:$jitterApiVersion")
-    implementation("com.google.guava:guava:33.4.8-jre")
-    implementation("org.ow2.asm:asm:9.10.1")
-    implementation("org.ow2.asm:asm-commons:9.10.1")
-    implementation("org.ow2.asm:asm-tree:9.10.1")
+    implementation("com.google.guava:guava:33.7.2-jre")
+    implementation("org.ow2.asm:asm:9.11.1")
+    implementation("org.ow2.asm:asm-commons:9.11.1")
+    implementation("org.ow2.asm:asm-tree:9.11.1")
     implementation("com.github.javaparser:javaparser-core:3.28.2")
     // the Kotlin PSI for dejittering Kotlin sources; compile only: the jar
     // is resolved lazily at dejitter time and loaded in an isolated
     // classloader, a runtime dependency would pollute the classpath of
     // Kotlin based builds (their Gradle plugin clashes with it)
     compileOnly("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
-    testImplementation(platform("org.junit:junit-bom:5.12.2"))
+    // the Kotlin metadata model for the @kotlin.Metadata rewrite of stripped
+    // Kotlin classes; compile only like the compiler embeddable: resolved
+    // lazily at strip time and loaded in an isolated classloader
+    compileOnly("org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.21")
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testImplementation("org.junit.jupiter:junit-jupiter-engine")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.12.2")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
     testImplementation("org.hamcrest:hamcrest:3.0")
-    testImplementation("org.mockito:mockito-core:5.17.0")
+    testImplementation("org.mockito:mockito-core:5.24.0")
     testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
+    testImplementation("org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.21")
 }
 
 tasks.register("generateResources") {
@@ -96,8 +101,8 @@ tasks.test {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
     withJavadocJar()
     withSourcesJar()
 }

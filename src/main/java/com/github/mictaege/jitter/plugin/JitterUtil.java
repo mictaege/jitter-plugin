@@ -19,6 +19,14 @@ final class JitterUtil {
      */
     public static final String KOTLIN_COMPILER_EMBEDDABLE =
             "org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21";
+    /**
+     * The Kotlin metadata model for rewriting the {@code @kotlin.Metadata} of
+     * stripped Kotlin classes, resolved lazily at strip time and loaded in an
+     * isolated classloader like the compiler embeddable. The version should
+     * match the Kotlin version of the consumers.
+     */
+    public static final String KOTLIN_METADATA_JVM =
+            "org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.21";
     private static final Logger logger = Logging.getLogger("jitter");
 
     private JitterUtil() {

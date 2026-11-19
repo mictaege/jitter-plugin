@@ -19,6 +19,26 @@ import static org.hamcrest.MatcherAssert.assertThat;
 public class KotlinUsageFinderTest extends StripperTestFixture {
 
     @Test
+    void shouldIgnoreClassLiteralReceivers() throws Exception {
+        // VersionInfo::class.java - the receiver of the .java access is a
+        // class literal, never a constant usage; the finder used to build a
+        // bogus internal name from it which crashed the lookup on Windows
+        final List<Path> src = writeKotlinSources(
+                "test/VersionInfo.kt",
+                "package test\n"
+                + "class VersionInfo\n",
+                "test/Consumer.kt",
+                "package test\n"
+                + "class Consumer {\n"
+                + "  fun path() = VersionInfo::class.java\n"
+                + "}\n");
+
+        final List<String> errors = check(src, Collections.<File>emptyList());
+
+        assertThat(errors.isEmpty(), is(true));
+    }
+
+    @Test
     void shouldAcceptDottedUsageOnConsistentlyGatedMember() throws Exception {
         final List<Path> src = writeKotlinSources(
                 "test/Constants.kt",

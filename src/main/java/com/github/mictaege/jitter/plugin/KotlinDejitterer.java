@@ -11,7 +11,9 @@ import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer;
 import org.jetbrains.kotlin.config.CompilerConfiguration;
 import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.psi.KtAnnotationEntry;
+import org.jetbrains.kotlin.psi.KtCallElement;
 import org.jetbrains.kotlin.psi.KtClassOrObject;
+import org.jetbrains.kotlin.psi.KtCollectionLiteralExpression;
 import org.jetbrains.kotlin.psi.KtDeclaration;
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression;
 import org.jetbrains.kotlin.psi.KtEnumEntry;
@@ -226,7 +228,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
         final Set<KtDeclaration> consumed = new LinkedHashSet<>();
         for (final KtDeclaration decl : decls) {
             if (decl instanceof KtNamedFunction) {
-                final KtAnnotationEntry fork = activeFork(ctx, decl);
+                final KtCallElement fork = activeFork(ctx, decl);
                 if (fork != null) {
                     final KtNamedFunction alt = findAltOf(ctx, (KtNamedFunction) decl,
                             argValue(ctx, fork, "to"));
@@ -241,7 +243,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
                 continue;
             }
             if (decl instanceof KtNamedFunction) {
-                final KtAnnotationEntry fork = activeFork(ctx, decl);
+                final KtCallElement fork = activeFork(ctx, decl);
                 if (fork != null) {
                     applyFork((KtNamedFunction) decl, fork, ctx);
                     continue;
@@ -252,7 +254,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
                 continue;
             }
             if (decl instanceof KtClassOrObject && !(decl instanceof KtEnumEntry)) {
-                final KtAnnotationEntry alter = activeAlter(ctx, decl);
+                final KtCallElement alter = activeAlter(ctx, decl);
                 if (alter != null) {
                     applyAlter((KtClassOrObject) decl, alter, internalPrefix, ctx);
                     continue;
@@ -299,7 +301,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
 
     // ------------------------------------------------------------------- fork
 
-    private void applyFork(final KtNamedFunction gateway, final KtAnnotationEntry fork,
+    private void applyFork(final KtNamedFunction gateway, final KtCallElement fork,
                            final FileCtx ctx) {
         final String to = argValue(ctx, fork, "to");
         final KtNamedFunction alt = findAltOf(ctx, gateway, to);
@@ -366,7 +368,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
 
     // ------------------------------------------------------------------ alter
 
-    private void applyAlter(final KtClassOrObject target, final KtAnnotationEntry alter,
+    private void applyAlter(final KtClassOrObject target, final KtCallElement alter,
                             final String internalPrefix, final FileCtx ctx) throws IOException {
         if (!internalPrefix.isEmpty()) {
             ctx.result.error("The @Alter target " + nameOf(target)
@@ -559,34 +561,95 @@ public final class KotlinDejitterer implements KotlinDejitter {
         return null;
     }
 
-    private KtAnnotationEntry activeFork(final FileCtx ctx, final KtDeclaration decl) {
-        return activeAnnotation(ctx, decl, "Fork");
+    private KtCallElement activeFork(final FileCtx ctx, final KtDeclaration decl) {
+        return activeAnnotation(ctx, decl, "Fork", "Gateway");
     }
 
-    private KtAnnotationEntry activeAlter(final FileCtx ctx, final KtDeclaration decl) {
-        return activeAnnotation(ctx, decl, "Alter");
+    private KtCallElement activeAlter(final FileCtx ctx, final KtDeclaration decl) {
+        return activeAnnotation(ctx, decl, "Alter", "Alternatives");
     }
 
-    private KtAnnotationEntry activeAnnotation(final FileCtx ctx, final KtDeclaration decl,
-                                               final String name) {
+    /**
+     * The entry of a repeatable annotation whose {@code ifActive} contains
+     * the active flavour, iterating all repeated entries and the entries of
+     * an explicitly written container, like the Java dejittering's
+     * {@code repeatable(annotations, "Fork", "Gateway")} does. The first
+     * active entry wins; with no flavour active none is active.
+     */
+    private KtCallElement activeAnnotation(final FileCtx ctx, final KtDeclaration decl,
+                                           final String single, final String container) {
         if (activeFlavour.isEmpty()) {
             return null;
         }
-        final KtAnnotationEntry annotation = annotationOf(ctx, decl, name);
-        if (annotation == null) {
-            return null;
+        for (final KtCallElement annotation : repeatableAnnotations(decl, single, container)) {
+            final String ifActive = argValue(ctx, annotation, "ifActive");
+            if (ifActive != null && active(ifActive)) {
+                return annotation;
+            }
         }
-        final String ifActive = argValue(ctx, annotation, "ifActive");
-        return ifActive != null && active(ifActive) ? annotation : null;
+        return null;
+    }
+
+    /**
+     * All entries of a repeatable annotation of the declaration: every
+     * annotation entry named {@code single} plus the nested entries of an
+     * explicitly written container annotation named {@code container}.
+     */
+    private List<KtCallElement> repeatableAnnotations(final KtDeclaration decl,
+                                                      final String single, final String container) {
+        final List<KtCallElement> out = new ArrayList<>();
+        for (final KtAnnotationEntry annotation : decl.getAnnotationEntries()) {
+            final String name = annotationName(annotation);
+            if (single.equals(name)) {
+                out.add(annotation);
+            } else if (container.equals(name)) {
+                out.addAll(nestedOf(annotation, single));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The nested entries of an explicitly written container annotation like
+     * {@code @Gateway([Fork(...), Fork(...)])}: the elements of the
+     * container's collection literal argument are annotation entries (with
+     * {@code @}) or call expressions (without {@code @}) of the single
+     * annotation.
+     */
+    private List<KtCallElement> nestedOf(final KtAnnotationEntry container, final String single) {
+        final List<KtCallElement> out = new ArrayList<>();
+        if (container.getValueArgumentList() == null) {
+            return out;
+        }
+        for (final KtValueArgument arg : container.getValueArgumentList().getArguments()) {
+            final KtExpression expr = arg.getArgumentExpression();
+            if (expr instanceof KtCollectionLiteralExpression) {
+                for (final KtExpression inner
+                        : ((KtCollectionLiteralExpression) expr).getInnerExpressions()) {
+                    if (inner instanceof KtCallElement
+                            && single.equals(calleeName((KtCallElement) inner))) {
+                        out.add((KtCallElement) inner);
+                    }
+                }
+            } else if (expr instanceof KtCallElement
+                    && single.equals(calleeName((KtCallElement) expr))) {
+                out.add((KtCallElement) expr);
+            }
+        }
+        return out;
     }
 
     private String annotationName(final KtAnnotationEntry annotation) {
-        final String text = annotation.getCalleeExpression() == null
-                ? "" : annotation.getCalleeExpression().getText();
+        return calleeName(annotation);
+    }
+
+    private String calleeName(final KtCallElement call) {
+        final KtExpression callee = call.getCalleeExpression();
+        final String text = callee == null ? "" : callee.getText();
         return text.substring(text.lastIndexOf('.') + 1);
     }
 
-    private List<String> flavourArgs(final FileCtx ctx, final KtAnnotationEntry annotation) {
+    private List<String> flavourArgs(final FileCtx ctx, final KtCallElement annotation) {
         final List<String> out = new ArrayList<>();
         if (annotation.getValueArgumentList() != null) {
             for (final KtValueArgument arg : annotation.getValueArgumentList().getArguments()) {
@@ -625,7 +688,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
      * arguments map by declaration order: the first one is
      * {@code ifActive}, the second one the template name.
      */
-    private String argValue(final FileCtx ctx, final KtAnnotationEntry annotation, final String name) {
+    private String argValue(final FileCtx ctx, final KtCallElement annotation, final String name) {
         if (annotation.getValueArgumentList() == null) {
             return null;
         }
@@ -665,9 +728,9 @@ public final class KotlinDejitterer implements KotlinDejitter {
             return;
         }
         String with = null;
-        for (final KtAnnotationEntry annotation : prop.getAnnotationEntries()) {
-            if ("AlterConstValue".equals(annotationName(annotation))
-                    && ifActiveValues(ctx, annotation).stream().anyMatch(this::active)) {
+        for (final KtCallElement annotation
+                : repeatableAnnotations(prop, "AlterConstValue", "AlterConstValues")) {
+            if (ifActiveValues(ctx, annotation).stream().anyMatch(this::active)) {
                 with = argValue(ctx, annotation, "with");
                 break;
             }
@@ -691,7 +754,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
      * The flavours of the {@code ifActive} array of an
      * {@code @AlterConstValue} annotation - positionally first or named.
      */
-    private List<String> ifActiveValues(final FileCtx ctx, final KtAnnotationEntry annotation) {
+    private List<String> ifActiveValues(final FileCtx ctx, final KtCallElement annotation) {
         final List<String> out = new ArrayList<>();
         if (annotation.getValueArgumentList() == null) {
             return out;
