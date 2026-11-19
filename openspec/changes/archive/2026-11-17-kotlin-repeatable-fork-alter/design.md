@@ -73,7 +73,7 @@ lazily resolved, isolated runtime dependency.
 
 ## Migration Plan
 
-No migration: this is a defect fix in a build plugin. Users on jitter-plugin 2026.3 get the fix
+No migration: this is a defect fix in a build plugin. Users on jitter-plugin 2026.4 get the fix
 by upgrading the plugin version; no source changes in consumer builds. Rollback is downgrading
 the plugin.
 
