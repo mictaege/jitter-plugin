@@ -141,6 +141,7 @@ public final class BytecodeStripper {
         EnumRewriter.rewriteEnums(ctx);
         OnlyIfRemover.removeOnlyIf(ctx);
         OnlyIfRemover.restoreDefaultConstructors(ctx);
+        GateRemover.removeGates(ctx);
         InitializerRemover.removeFieldInitializers(ctx);
         // the flavour specific constant values, after the removals so
         // that only the constants visible in the active flavour are patched

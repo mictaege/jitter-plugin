@@ -16,6 +16,7 @@ The design decisions behind the bytecode stripping and their rationale are recor
 - [How it works](#how-it-works)
 - [_jitter_ Source Code Markup](#jitter-source-code-markup)
   - [_@OnlyIf_](#onlyif)
+  - [_Gate.onlyIf_](#gateonlyif)
   - [_@Fork_](#fork)
   - [_@Alter_](#alter)
 - [_jitter_ Resource Handling](#jitter-resource-handling)
@@ -293,6 +294,29 @@ public class PersonDaoBImpl implements PersonDaoIF {
 ```
 
 The removal is aware of the typical compiler constructs around the removed member: enum constants are removed from the constant list and the surviving ordinals are renumbered exactly like a recompile would, compiler-generated ```lambda$<method>$*``` synthetic methods of removed methods are removed, and inline initializers of removed fields are removed from the constructors. The _jitter_ annotations themselves are stripped from the surviving bytecode, so the flavour model does not leak into the distribution.
+
+### _Gate.onlyIf_
+
+_@OnlyIf_ can only be applied to declarations (types, fields, constructors, methods, packages). When flavour-specific code is built with method calls inside a method or lambda body - for example a type-safe builder DSL like `spec("...") { scenario("...") { ... } }` - there is no declaration to annotate. For that case _jitter_ offers the block-level gate `Gate.onlyIf(flavours, block)`:
+
+```Java
+public String gatedText() {
+    Gate.onlyIf(List.of(Flavour.CUSTOMER_A), () -> text = "A");
+    Gate.onlyIf(List.of(Flavour.CUSTOMER_B, Flavour.CUSTOMER_C), () -> text = "BC");
+    return text;
+}
+```
+
+```Kotlin
+fun gatedText(): String {
+    var text = "plain"
+    Gate.onlyIf(listOf(Flavour.CUSTOMER_A)) { text = "A" }
+    Gate.onlyIf(listOf(Flavour.CUSTOMER_B, Flavour.CUSTOMER_C)) { text = "BC" }
+    return text
+}
+```
+
+In the 150% model the block executes normally. When a flavour is stripped whose name is not in the given list, the whole gated call - including the compiled lambda body - is removed from the bytecode, as if the statement had never been written; this works for Java and Kotlin alike, because both compile the lambda to a synthetic method plus a call site. In the dejittered source variant of the active flavour, an active gate is unwrapped to its block body and an inactive gate is removed, so no `Gate.onlyIf` call survives in the dejittered sources.
 
 ### _@Fork_
 

@@ -11,7 +11,10 @@ import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer;
 import org.jetbrains.kotlin.config.CompilerConfiguration;
 import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.psi.KtAnnotationEntry;
+import org.jetbrains.kotlin.psi.KtBinaryExpression;
+import org.jetbrains.kotlin.psi.KtBlockExpression;
 import org.jetbrains.kotlin.psi.KtCallElement;
+import org.jetbrains.kotlin.psi.KtCallExpression;
 import org.jetbrains.kotlin.psi.KtClassOrObject;
 import org.jetbrains.kotlin.psi.KtCollectionLiteralExpression;
 import org.jetbrains.kotlin.psi.KtDeclaration;
@@ -20,6 +23,7 @@ import org.jetbrains.kotlin.psi.KtEnumEntry;
 import org.jetbrains.kotlin.psi.KtExpression;
 import org.jetbrains.kotlin.psi.KtFile;
 import org.jetbrains.kotlin.psi.KtImportDirective;
+import org.jetbrains.kotlin.psi.KtLambdaExpression;
 import org.jetbrains.kotlin.psi.KtNamedDeclaration;
 import org.jetbrains.kotlin.psi.KtNamedFunction;
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression;
@@ -44,6 +48,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -252,6 +257,9 @@ public final class KotlinDejitterer implements KotlinDejitter {
             if (onlyIfOf(ctx, decl) != null && !activeOnlyIf(ctx, decl)) {
                 removeDecl(decl, internalPrefix, ctx);
                 continue;
+            }
+            if (decl instanceof KtNamedFunction) {
+                applyGateBlocks(ctx, (KtNamedFunction) decl);
             }
             if (decl instanceof KtClassOrObject && !(decl instanceof KtEnumEntry)) {
                 final KtCallElement alter = activeAlter(ctx, decl);
@@ -531,6 +539,130 @@ public final class KotlinDejitterer implements KotlinDejitter {
                         annotation.getTextRange().getEndOffset());
             }
         }
+    }
+
+    /**
+     * Applies the {@code Gate.onlyIf(...)} block gates of a function to the
+     * dejittered source - the source mirror of the bytecode stripping: a gate
+     * whose flavour list does not include the active flavour is removed as a
+     * whole (including the trailing newline so no empty line remains), a gate
+     * that includes it is unwrapped to its lambda body, so the dejittered
+     * source is the plain source of the active flavour.
+     */
+    private void applyGateBlocks(final FileCtx ctx, final KtNamedFunction fn) {
+        if (activeFlavour.isEmpty() || !(fn.getBodyExpression() instanceof KtBlockExpression)) {
+            return;
+        }
+        for (final KtExpression st : ((KtBlockExpression) fn.getBodyExpression()).getStatements()) {
+            final KtCallExpression call = gateCall(st);
+            if (call == null) {
+                continue;
+            }
+            final List<String> flavours = gateFlavours(ctx, call);
+            if (flavours == null) {
+                continue;
+            }
+            final int start = st.getTextRange().getStartOffset();
+            final int stmtEnd = st.getTextRange().getEndOffset();
+            if (flavours.stream().noneMatch(this::active)) {
+                // remove the whole line, including the trailing newline
+                int end = stmtEnd;
+                while (end < ctx.text.length()
+                        && (ctx.text.charAt(end) == ' ' || ctx.text.charAt(end) == '\t')) {
+                    end++;
+                }
+                if (end < ctx.text.length() && ctx.text.charAt(end) == '\r') {
+                    end++;
+                }
+                if (end < ctx.text.length() && ctx.text.charAt(end) == '\n') {
+                    end++;
+                }
+                ctx.edits.remove(start, end);
+                ctx.result.info("Remove gate block in " + fn.getName());
+            } else {
+                final String body = lambdaBodyText(call);
+                if (body != null) {
+                    ctx.edits.replace(start, stmtEnd, body);
+                    ctx.result.info("Unwrap gate block in " + fn.getName());
+                }
+            }
+        }
+    }
+
+    /**
+     * The {@code Gate.onlyIf(...)} call of a statement, or null when the
+     * statement is no gate call.
+     */
+    private KtCallExpression gateCall(final KtExpression st) {
+        KtCallExpression call = null;
+        KtExpression receiver = null;
+        if (st instanceof KtDotQualifiedExpression) {
+            final KtDotQualifiedExpression dqe = (KtDotQualifiedExpression) st;
+            if (dqe.getSelectorExpression() instanceof KtCallExpression) {
+                call = (KtCallExpression) dqe.getSelectorExpression();
+                receiver = dqe.getReceiverExpression();
+            }
+        } else if (st instanceof KtBinaryExpression) {
+            final KtExpression right = ((KtBinaryExpression) st).getRight();
+            if (right instanceof KtDotQualifiedExpression) {
+                final KtDotQualifiedExpression dqe = (KtDotQualifiedExpression) right;
+                if (dqe.getSelectorExpression() instanceof KtCallExpression) {
+                    call = (KtCallExpression) dqe.getSelectorExpression();
+                    receiver = dqe.getReceiverExpression();
+                }
+            }
+        }
+        if (call == null || !"onlyIf".equals(call.getCalleeExpression().getText())) {
+            return null;
+        }
+        if (receiver == null || !receiver.getText().endsWith("Gate")) {
+            return null;
+        }
+        return call;
+    }
+
+    /**
+     * The flavour list of a {@code Gate.onlyIf(listOf(...), ...)} call,
+     * or null when the first argument is no list literal call.
+     */
+    private List<String> gateFlavours(final FileCtx ctx, final KtCallExpression call) {
+        if (call.getValueArguments().isEmpty()) {
+            return null;
+        }
+        final KtExpression first = call.getValueArguments().get(0).getArgumentExpression();
+        if (!(first instanceof KtCallExpression)) {
+            return null;
+        }
+        final List<String> out = new ArrayList<>();
+        for (final KtValueArgument arg : ((KtCallExpression) first).getValueArguments()) {
+            collectValues(ctx, arg.getArgumentExpression(), out);
+        }
+        return out;
+    }
+
+    /**
+     * The text of the lambda body of an active gate call (the trailing
+     * lambda argument), or null when there is none.
+     */
+    private String lambdaBodyText(final KtCallExpression call) {
+        KtLambdaExpression lambda = null;
+        if (!call.getLambdaArguments().isEmpty()) {
+            final KtExpression arg = call.getLambdaArguments().get(0).getArgumentExpression();
+            if (arg instanceof KtLambdaExpression) {
+                lambda = (KtLambdaExpression) arg;
+            }
+        } else if (!call.getValueArguments().isEmpty()) {
+            final KtExpression last = call.getValueArguments()
+                    .get(call.getValueArguments().size() - 1).getArgumentExpression();
+            if (last instanceof KtLambdaExpression) {
+                lambda = (KtLambdaExpression) last;
+            }
+        }
+        if (lambda == null || !(lambda.getBodyExpression() instanceof KtBlockExpression)) {
+            return null;
+        }
+        return ((KtBlockExpression) lambda.getBodyExpression()).getStatements().stream()
+                .map(KtExpression::getText).collect(Collectors.joining("\n"));
     }
 
     private boolean activeOnlyIf(final FileCtx ctx, final KtDeclaration decl) {

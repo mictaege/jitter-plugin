@@ -20,8 +20,11 @@ import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.ArrayInitializerExpr;
+import com.github.javaparser.ast.expr.AssignExpr;
+import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
+import com.github.javaparser.ast.expr.LambdaExpr;
 import com.github.javaparser.ast.expr.MemberValuePair;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.NormalAnnotationExpr;
@@ -29,6 +32,9 @@ import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.github.javaparser.ast.nodeTypes.NodeWithAnnotations;
 import com.github.javaparser.ast.nodeTypes.NodeWithJavadoc;
+import com.github.javaparser.ast.stmt.BlockStmt;
+import com.github.javaparser.ast.stmt.ExpressionStmt;
+import com.github.javaparser.ast.stmt.Statement;
 
 import java.io.File;
 import java.io.IOException;
@@ -420,6 +426,7 @@ public final class Dejitterer implements AutoCloseable {
                     ctx.removeElement(method);
                 } else {
                     cleanJitterAnnotations(method, ctx);
+                    applyGateBlocks(cu, method, ctx);
                 }
             } else if (member instanceof ConstructorDeclaration) {
                 final ConstructorDeclaration constructor = (ConstructorDeclaration) member;
@@ -443,6 +450,87 @@ public final class Dejitterer implements AutoCloseable {
                 }
             }
         }
+    }
+
+    // ---------------------------------------------------------- block gates
+
+    /**
+     * Applies the {@code Gate.onlyIf(...)} block gates of a method to the
+     * dejittered source - the source mirror of the bytecode stripping: a
+     * gate whose flavour list does not include the active flavour is removed
+     * as a whole, a gate that includes it is unwrapped to its block body, so
+     * the dejittered source is the plain source of the active flavour.
+     */
+    private void applyGateBlocks(final CompilationUnit cu, final MethodDeclaration method,
+                                 final FileCtx ctx) {
+        if (activeFlavour.isEmpty() || method.getBody().isEmpty()) {
+            return;
+        }
+        for (final Statement st : new ArrayList<>(method.getBody().get().getStatements())) {
+            final MethodCallExpr call = gateCall(st);
+            if (call == null) {
+                continue;
+            }
+            final List<String> flavours = gateFlavours(cu, call);
+            if (flavours == null) {
+                continue;
+            }
+            final Range range = st.getRange().orElseThrow(IllegalStateException::new);
+            if (flavours.stream().noneMatch(this::active)) {
+                ctx.removeRange(range);
+                result.info("Remove gate block in " + method.getDeclarationAsString(false, false, false));
+            } else if (call.getArguments().size() == 2
+                    && call.getArgument(1) instanceof LambdaExpr) {
+                final Statement body = ((LambdaExpr) call.getArgument(1)).getBody();
+                final String replacement = body instanceof BlockStmt
+                        ? ((BlockStmt) body).getStatements().stream()
+                                .map(Statement::toString).collect(Collectors.joining("\n"))
+                        : body.toString();
+                ctx.replace(range, replacement);
+                result.info("Unwrap gate block in " + method.getDeclarationAsString(false, false, false));
+            }
+        }
+    }
+
+    /**
+     * The {@code Gate.onlyIf(...)} call of a statement, or null when the
+     * statement is no gate call.
+     */
+    private MethodCallExpr gateCall(final Statement st) {
+        if (!(st instanceof ExpressionStmt)) {
+            return null;
+        }
+        Expression expr = ((ExpressionStmt) st).getExpression();
+        if (expr instanceof AssignExpr) {
+            expr = ((AssignExpr) expr).getValue();
+        }
+        if (!(expr instanceof MethodCallExpr)) {
+            return null;
+        }
+        final MethodCallExpr call = (MethodCallExpr) expr;
+        if (!"onlyIf".equals(call.getNameAsString())) {
+            return null;
+        }
+        final String scope = call.getScope().map(Object::toString).orElse("");
+        if (!scope.equals("Gate") && !scope.endsWith(".Gate")) {
+            return null;
+        }
+        return call;
+    }
+
+    /**
+     * The flavour list of a {@code Gate.onlyIf(List.of(...), ...)} call,
+     * or null when the first argument is no list literal call.
+     */
+    private List<String> gateFlavours(final CompilationUnit cu, final MethodCallExpr call) {
+        if (call.getArguments().isEmpty() || !(call.getArgument(0) instanceof MethodCallExpr)) {
+            return null;
+        }
+        final List<String> out = new ArrayList<>();
+        for (final Expression arg : ((MethodCallExpr) call.getArgument(0)).getArguments()) {
+            collectFlavours(cu, arg, out);
+        }
+        return out;
     }
 
     // ---------------------------------------------------------------- fork
