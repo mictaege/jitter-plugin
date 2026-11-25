@@ -193,9 +193,11 @@ public final class JvmKotlinMetadataRewriter implements KotlinMetadataRewriter {
             km.getEnumEntries().removeIf(name::equals);
             km.getProperties().removeIf(p -> fieldSigEquals(p, name, desc));
         }
-        // nested class names are simple names relative to the outer class
-        km.getNestedClasses().removeIf(n -> removedClasses.stream().anyMatch(
-                rc -> rc.startsWith(owner + "$") && rc.substring(owner.length() + 1).equals(n)));
+        // nested class names may be simple names relative to the outer class or full
+        // internal names, depending on the metadata version
+        km.getNestedClasses().removeIf(n -> removedClasses.contains(n)
+                || removedClasses.stream().anyMatch(
+                        rc -> rc.startsWith(owner + "$") && rc.substring(owner.length() + 1).equals(n)));
         if (removedClasses.contains(owner + "$Companion")) {
             km.setCompanionObject(null);
         }

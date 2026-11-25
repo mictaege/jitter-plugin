@@ -108,6 +108,129 @@ public class GateRemoverTest {
                 dangling.isEmpty(), is(true));
     }
 
+    @Test
+    void nestedLambdaInsideRemovedGateLeavesNoDanglingReferences() throws Exception {
+        final Path classes = compile(
+                "test/NasaOnly.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "@OnlyIf(\"NASA\")\n"
+                        + "public class NasaOnly { }\n",
+                "test/Gated.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Gate;\n"
+                        + "public class Gated {\n"
+                        + "  public void apply() {\n"
+                        + "    Gate.onlyIf(java.util.List.of(\"NASA\"), () -> {\n"
+                        + "      Runnable nested = () -> new NasaOnly();\n"
+                        + "      nested.run();\n"
+                        + "    });\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode gated = read(classes, "test/Gated");
+        assertThat("outer gate lambda removed",
+                method(gated, "lambda$apply$0", null), is(nullValue()));
+        assertThat("nested lambda removed",
+                method(gated, "lambda$lambda$apply$0$0", null), is(nullValue()));
+        final List<String> dangling = ReferenceVerifier.findDanglingReferences(
+                java.util.Set.of(classes.toFile()), result.getRemovedClasses(),
+                result.getRemovedMembers());
+        assertThat("no dangling references from the nested lambda",
+                dangling.isEmpty(), is(true));
+    }
+
+    @Test
+    void anonymousClassInsideRemovedGateIsRemovedWhenUnreferenced() throws Exception {
+        final Path classes = compile(
+                "test/NasaOnly.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "@OnlyIf(\"NASA\")\n"
+                        + "public class NasaOnly { }\n",
+                "test/Gated.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Gate;\n"
+                        + "public class Gated {\n"
+                        + "  public void apply() {\n"
+                        + "    Gate.onlyIf(java.util.List.of(\"NASA\"), () -> {\n"
+                        + "      Runnable r = new Runnable() {\n"
+                        + "        public void run() { new NasaOnly(); }\n"
+                        + "      };\n"
+                        + "      r.run();\n"
+                        + "    });\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        assertThat("gate-local anonymous class removed",
+                result.getRemovedClasses().contains("test/Gated$1"), is(true));
+        final List<String> dangling = ReferenceVerifier.findDanglingReferences(
+                java.util.Set.of(classes.toFile()), result.getRemovedClasses(),
+                result.getRemovedMembers());
+        assertThat("no dangling references from the anonymous class",
+                dangling.isEmpty(), is(true));
+    }
+
+    @Test
+    void anonymousClassReferencedFromSurvivingCodeIsKept() throws Exception {
+        final Path classes = compile(
+                "test/Gated.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Gate;\n"
+                        + "public class Gated {\n"
+                        + "  private final Runnable kept = new Runnable() {\n"
+                        + "    public void run() { }\n"
+                        + "  };\n"
+                        + "  public void apply() {\n"
+                        + "    Gate.onlyIf(java.util.List.of(\"NASA\"), () -> kept.run());\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        assertThat("referenced anonymous class kept",
+                result.getRemovedClasses().contains("test/Gated$1"), is(false));
+    }
+
+    @Test
+    void namedNestedClassInsideDoubleNestedLambdaOfRemovedGateIsRemoved() throws Exception {
+        final Path classes = compile(
+                "test/NasaOnly.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "@OnlyIf(\"NASA\")\n"
+                        + "public class NasaOnly { }\n",
+                "test/Gated.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Gate;\n"
+                        + "public class Gated {\n"
+                        + "  static class Nested { NasaOnly n = new NasaOnly(); }\n"
+                        + "  public void apply() {\n"
+                        + "    Gate.onlyIf(java.util.List.of(\"NASA\"), () -> {\n"
+                        + "      Runnable outer = () -> {\n"
+                        + "        Runnable inner = () -> { Nested x = new Nested(); x.toString(); };\n"
+                        + "        inner.run();\n"
+                        + "      };\n"
+                        + "      outer.run();\n"
+                        + "    });\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        assertThat("gate-local nested class removed",
+                result.getRemovedClasses().contains("test/Gated$Nested"), is(true));
+        final List<String> dangling = ReferenceVerifier.findDanglingReferences(
+                java.util.Set.of(classes.toFile()), result.getRemovedClasses(),
+                result.getRemovedMembers());
+        assertThat("no dangling references from the nested class",
+                dangling.isEmpty(), is(true));
+    }
+
     private static boolean callsGate(final ClassNode node, final String methodName) {
         final MethodNode method = method(node, methodName, null);
         if (method == null) {

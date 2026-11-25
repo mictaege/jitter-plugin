@@ -9,12 +9,16 @@ import java.util.Set;
 
 import org.objectweb.asm.Handle;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.MultiANewArrayInsnNode;
+import org.objectweb.asm.tree.TypeInsnNode;
 
 /**
  * Removes the block-level flavour gates ({@code Gate.onlyIf(flavours, block)})
@@ -36,15 +40,81 @@ final class GateRemover {
     }
 
     static void removeGates(final StripContext ctx) {
+        final Set<String> gateLocalAnonClasses = new HashSet<>();
         for (final ClassNode node : new ArrayList<>(ctx.nodes.values())) {
             for (final MethodNode method : new ArrayList<>(node.methods)) {
-                removeGatesInMethod(ctx, node, method);
+                removeGatesInMethod(ctx, node, method, gateLocalAnonClasses);
+            }
+        }
+        removeOrphanedLambdas(ctx, gateLocalAnonClasses);
+        removeOrphanedAnonClasses(ctx, gateLocalAnonClasses);
+    }
+
+    /**
+     * Removes every synthetic {@code lambda$} method that no surviving bytecode references
+     * anymore. Gate removal deletes the gated call sites, so the lambda bodies of a removed
+     * gate (at any nesting depth) become unreferenced; some of them are not reachable by
+     * following the {@code invokedynamic} chain (e.g. Kotlin {@code by lazy} accessor lambdas),
+     * so this sweep runs to a fixpoint over all classes instead.
+     */
+    private static void removeOrphanedLambdas(final StripContext ctx,
+                                               final Set<String> gateLocalAnonClasses) {
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (final ClassNode node : new ArrayList<>(ctx.nodes.values())) {
+                for (final MethodNode lambda : new ArrayList<>(node.methods)) {
+                    if (!isSyntheticLambdaName(lambda.name)) {
+                        continue;
+                    }
+                    if (!isLambdaReferenced(ctx, node.name, lambda)) {
+                        collectAnonCandidates(node, lambda, gateLocalAnonClasses);
+                        node.methods.remove(lambda);
+                        ctx.result.removedMember(StripResult.memberKey(node.name, lambda.name, lambda.desc));
+                        ctx.result.info("Remove orphaned lambda " + node.name.replace('/', '.')
+                                + "#" + lambda.name);
+                        ctx.removedLambdas.computeIfAbsent(node.name, k -> new ArrayList<>())
+                                .add(new String[]{lambda.name, lambda.desc});
+                        ctx.dirty.add(node.name);
+                        changed = true;
+                    }
+                }
             }
         }
     }
 
+    private static boolean isLambdaReferenced(final StripContext ctx, final String owner,
+                                              final MethodNode lambda) {
+        for (final ClassNode node : ctx.nodes.values()) {
+            for (final MethodNode method : node.methods) {
+                for (int i = 0; i < method.instructions.size(); i++) {
+                    final AbstractInsnNode insn = method.instructions.get(i);
+                    if (insn instanceof InvokeDynamicInsnNode) {
+                        for (final Object arg : ((InvokeDynamicInsnNode) insn).bsmArgs) {
+                            if (arg instanceof Handle) {
+                                final Handle handle = (Handle) arg;
+                                if (handle.getOwner().equals(owner) && handle.getName().equals(lambda.name)
+                                        && handle.getDesc().equals(lambda.desc)) {
+                                    return true;
+                                }
+                            }
+                        }
+                    } else if (insn instanceof MethodInsnNode) {
+                        final MethodInsnNode call = (MethodInsnNode) insn;
+                        if (call.owner.equals(owner) && call.name.equals(lambda.name)
+                                && call.desc.equals(lambda.desc)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     private static void removeGatesInMethod(final StripContext ctx, final ClassNode node,
-                                            final MethodNode method) {
+                                            final MethodNode method,
+                                            final Set<String> gateLocalAnonClasses) {
         final List<AbstractInsnNode> insns = new ArrayList<>();
         for (int i = 0; i < method.instructions.size(); i++) {
             insns.add(method.instructions.get(i));
@@ -102,7 +172,7 @@ final class GateRemover {
                 }
             }
             span.forEach(method.instructions::remove);
-            removeLambdaBody(ctx, node, (InvokeDynamicInsnNode) lambda);
+            removeLambdaBody(ctx, node, (InvokeDynamicInsnNode) lambda, gateLocalAnonClasses);
             ctx.dirty.add(node.name);
             ctx.result.info("Remove gate block in " + node.name.replace('/', '.')
                     + "#" + method.name);
@@ -168,22 +238,144 @@ final class GateRemover {
      * metadata rewrite drop it as well.
      */
     private static void removeLambdaBody(final StripContext ctx, final ClassNode node,
-                                         final InvokeDynamicInsnNode lambda) {
+                                         final InvokeDynamicInsnNode lambda,
+                                         final Set<String> gateLocalAnonClasses) {
         for (final Object arg : lambda.bsmArgs) {
             if (arg instanceof Handle) {
                 final Handle handle = (Handle) arg;
-                if (node.name.equals(handle.getOwner()) && handle.getName().startsWith("lambda$")) {
-                    node.methods.removeIf(m -> m.name.equals(handle.getName())
-                            && m.desc.equals(handle.getDesc()));
-                    ctx.result.removedMember(StripResult.memberKey(node.name,
-                            handle.getName(), handle.getDesc()));
-                    ctx.result.info("Remove gated lambda " + node.name.replace('/', '.')
-                            + "#" + handle.getName());
-                    ctx.removedLambdas.computeIfAbsent(node.name, k -> new ArrayList<>())
-                            .add(new String[]{handle.getName(), handle.getDesc()});
+                if (node.name.equals(handle.getOwner()) && isSyntheticLambdaName(handle.getName())) {
+                    removeLambdaMethod(ctx, node, handle.getName(), handle.getDesc(),
+                            gateLocalAnonClasses);
                 }
             }
         }
+    }
+
+    /**
+     * Removes one synthetic lambda method, transitively: nested lambdas referenced from the
+     * removed body via further {@code invokedynamic}s are removed as well, and anonymous inner
+     * classes of the enclosing top-level class instantiated in the body are collected for the
+     * orphan sweep in {@link #removeGates}.
+     */
+    private static void removeLambdaMethod(final StripContext ctx, final ClassNode node,
+                                           final String name, final String desc,
+                                           final Set<String> gateLocalAnonClasses) {
+        final MethodNode lambdaMethod = node.methods.stream()
+                .filter(m -> m.name.equals(name) && m.desc.equals(desc))
+                .findFirst()
+                .orElse(null);
+        if (lambdaMethod == null) {
+            return; // already removed via another path
+        }
+        for (int i = 0; i < lambdaMethod.instructions.size(); i++) {
+            final AbstractInsnNode insn = lambdaMethod.instructions.get(i);
+            if (insn instanceof InvokeDynamicInsnNode) {
+                for (final Object arg : ((InvokeDynamicInsnNode) insn).bsmArgs) {
+                    if (arg instanceof Handle) {
+                        final Handle handle = (Handle) arg;
+                        if (node.name.equals(handle.getOwner())
+                                && isSyntheticLambdaName(handle.getName())) {
+                            removeLambdaMethod(ctx, node, handle.getName(), handle.getDesc(),
+                                    gateLocalAnonClasses);
+                        }
+                    }
+                }
+            }
+        }
+        collectAnonCandidates(node, lambdaMethod, gateLocalAnonClasses);
+        node.methods.remove(lambdaMethod);
+
+        ctx.result.removedMember(StripResult.memberKey(node.name, name, desc));
+        ctx.result.info("Remove gated lambda " + node.name.replace('/', '.') + "#" + name);
+        ctx.removedLambdas.computeIfAbsent(node.name, k -> new ArrayList<>())
+                .add(new String[]{name, desc});
+    }
+
+    /**
+     * Removes the anonymous classes that were instantiated only inside removed gate blocks: a
+     * candidate survives only if some surviving bytecode still references it.
+     */
+    private static void removeOrphanedAnonClasses(final StripContext ctx,
+                                                  final Set<String> candidates) {
+        for (final String candidate : candidates) {
+            if (!ctx.nodes.containsKey(candidate)) {
+                continue;
+            }
+            final boolean ref = isReferenced(ctx, candidate);
+            if (!ref) {
+                OnlyIfRemover.removeClass(ctx, candidate);
+            }
+        }
+    }
+
+    private static boolean isReferenced(final StripContext ctx, final String internalName) {
+        for (final ClassNode node : ctx.nodes.values()) {
+            if (node.name.equals(internalName)) {
+                continue; // the candidate's own fields/methods reference itself
+            }
+            for (final MethodNode method : node.methods) {
+                for (int i = 0; i < method.instructions.size(); i++) {
+                    if (references(method.instructions.get(i), internalName)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean references(final AbstractInsnNode insn, final String internalName) {
+        if (insn instanceof MethodInsnNode) {
+            return ((MethodInsnNode) insn).owner.equals(internalName);
+        }
+        if (insn instanceof FieldInsnNode) {
+            return ((FieldInsnNode) insn).owner.equals(internalName);
+        }
+        if (insn instanceof TypeInsnNode) {
+            return ((TypeInsnNode) insn).desc.equals(internalName);
+        }
+        if (insn instanceof MultiANewArrayInsnNode) {
+            return ((MultiANewArrayInsnNode) insn).desc.contains(internalName);
+        }
+        if (insn instanceof LdcInsnNode && ((LdcInsnNode) insn).cst instanceof Type) {
+            return ((Type) ((LdcInsnNode) insn).cst).getInternalName().equals(internalName);
+        }
+        if (insn instanceof InvokeDynamicInsnNode) {
+            final InvokeDynamicInsnNode indy = (InvokeDynamicInsnNode) insn;
+            if (indy.bsm.getOwner().equals(internalName)) {
+                return true;
+            }
+            for (final Object arg : indy.bsmArgs) {
+                if (arg instanceof Handle && ((Handle) arg).getOwner().equals(internalName)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Collects classes instantiated ({@code NEW}) inside the given (removed) lambda body as
+     * candidates for the orphan sweep. The sweep only removes a candidate that no surviving
+     * bytecode references anymore, so collecting broadly is safe.
+     */
+    private static void collectAnonCandidates(final ClassNode node, final MethodNode lambdaMethod,
+                                              final Set<String> gateLocalAnonClasses) {
+        for (int i = 0; i < lambdaMethod.instructions.size(); i++) {
+            final AbstractInsnNode insn = lambdaMethod.instructions.get(i);
+            if (insn instanceof TypeInsnNode && insn.getOpcode() == Opcodes.NEW) {
+                gateLocalAnonClasses.add(((TypeInsnNode) insn).desc);
+            }
+        }
+    }
+
+    /**
+     * Synthetic lambda method names: {@code lambda$...} for lambdas in ordinary methods and
+     * {@code _init_$lambda$...} / {@code ...$lambda$...} for lambdas nested in a constructor
+     * lambda or in another lambda.
+     */
+    private static boolean isSyntheticLambdaName(final String name) {
+        return name.startsWith("lambda$") || name.contains("$lambda$");
     }
 
 }
