@@ -199,7 +199,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
         if (ctx.replacement != null) {
             // a top level @Alter replaces the whole file, like in the Java
             // dejittering - the target's file becomes the template's variant
-            return pruneImports(ctx.replacement, ctx.replacementImports);
+            return pruneImports(ctx.replacement, ctx.replacementImports, result);
         }
         if (!declarations.isEmpty() && gatedTopLevel == declarations.size()) {
             // the bytecode stripping removes the classes of the flavour
@@ -208,7 +208,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
             ctx.result.info("Remove file " + file.getFileName());
             return null;
         }
-        final String out = pruneImports(ctx.edits.apply(), ctx.imports);
+        final String out = pruneImports(ctx.edits.apply(), ctx.imports, result);
         for (final KtDeclaration decl : declarations) {
             if (ctx.removed.contains(decl)) {
                 continue;
@@ -1006,21 +1006,28 @@ public final class KotlinDejitterer implements KotlinDejitter {
     // ----------------------------------------------------------------- output
 
     /**
-     * The jitter imports leave the variant together with their
-     * annotations: an import is dropped when the annotation it names no
-     * longer occurs.
+     * Drops imports that are no longer needed in the dejittered variant:
+     * jitter API imports whose annotation no longer occurs, and any import
+     * whose class was removed in the active flavour (as recorded in the
+     * removal manifest) or whose simple name no longer appears in the
+     * remaining file body.
      */
-    private String pruneImports(final String text, final List<String> imports) {
+    private String pruneImports(final String text, final List<String> imports,
+                                final StripResult result) {
         String out = text;
+        final Set<String> removedClasses = result.getRemovedClasses();
         for (final String imp : imports) {
-            if (!imp.startsWith(JITTER_API_IMPORT) || !out.contains("import " + imp)) {
+            if (!out.contains("import " + imp)) {
                 continue;
             }
-            final String simple = imp.substring(JITTER_API_IMPORT.length());
+            final String simple = imp.substring(imp.lastIndexOf('.') + 1);
+            final String internalName = imp.replace('.', '/');
+            final boolean removed = removedClasses.contains(internalName);
+            final String bodyWithoutImport = out.replace("import " + imp, "");
             final boolean used = Pattern
                     .compile("(?<![A-Za-z0-9_.])" + Pattern.quote(simple) + "(?![A-Za-z0-9_])")
-                    .matcher(out.replace("import " + imp, "")).find();
-            if (!used) {
+                    .matcher(bodyWithoutImport).find();
+            if (!used || removed) {
                 out = out.replaceFirst("(?m)^import " + Pattern.quote(imp) + "\\n", "");
             }
         }

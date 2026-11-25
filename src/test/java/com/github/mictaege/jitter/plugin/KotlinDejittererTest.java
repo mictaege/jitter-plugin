@@ -506,6 +506,99 @@ public class KotlinDejittererTest {
         assertThat(result.getErrors().isEmpty(), is(true));
     }
 
+    @Test
+    void dropsImportsOfPackageGatedRemovedClasses() throws Exception {
+        write("repro/a/package-info.java",
+                "@com.github.mictaege.jitter.api.OnlyIf(\"Esa\")\n"
+                + "package repro.a;\n");
+        write("repro/a/ADao.kt",
+                "package repro.a\n\nclass ADao\n");
+        write("repro/b/package-info.java",
+                "@com.github.mictaege.jitter.api.OnlyIf(\"Nasa\")\n"
+                + "package repro.b;\n");
+        write("repro/b/BDao.kt",
+                "package repro.b\n\nclass BDao\n");
+        write("repro/Helper.kt",
+                "package repro\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "import repro.a.ADao\n"
+                + "import repro.b.BDao\n"
+                + "\n"
+                + "class Helper {\n"
+                + "    private val dao: Any\n"
+                + "\n"
+                + "    @OnlyIf(\"Esa\")\n"
+                + "    constructor(aDao: ADao) {\n"
+                + "        dao = aDao\n"
+                + "    }\n"
+                + "\n"
+                + "    @OnlyIf(\"Nasa\")\n"
+                + "    constructor(bDao: BDao) {\n"
+                + "        dao = bDao\n"
+                + "    }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("repro/Helper.kt");
+        assertThat(text, containsString("import repro.a.ADao"));
+        assertThat(text, not(containsString("import repro.b.BDao")));
+        assertThat(text, containsString("constructor(aDao: ADao)"));
+        assertThat(text, not(containsString("BDao")));
+        assertThat(text, not(containsString("OnlyIf")));
+        assertThat(result.getRemovedClasses(), is(Set.of("repro/b/BDao")));
+    }
+
+    @Test
+    void dropsImportsOfClassGatedRemovedClasses() throws Exception {
+        write("com/other/Removed.kt",
+                "package com.other\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "@OnlyIf(\"Nasa\")\n"
+                + "class Removed\n");
+        write("com/example/User.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "import com.other.Removed\n"
+                + "class User {\n"
+                + "    @OnlyIf(\"Nasa\")\n"
+                + "    fun nasa() = Removed()\n"
+                + "    fun plain() = 42\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("com/example/User.kt");
+        assertThat(text, not(containsString("import com.other.Removed")));
+        assertThat(text, not(containsString("Removed")));
+        assertThat(text, containsString("fun plain() = 42"));
+        assertThat(result.getRemovedClasses(), is(Set.of("com/other/Removed")));
+    }
+
+    @Test
+    void keepsImportsStillUsedBySurvivingCode() throws Exception {
+        write("com/other/Shared.kt",
+                "package com.other\n\nclass Shared\n");
+        write("com/example/User.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.OnlyIf\n"
+                + "import com.other.Shared\n"
+                + "class User {\n"
+                + "    @OnlyIf(\"Esa\")\n"
+                + "    fun esa() = Shared()\n"
+                + "    fun plain() = Shared()\n"
+                + "}\n");
+
+        dejitter("Esa");
+
+        final String text = read("com/example/User.kt");
+        assertThat(text, containsString("import com.other.Shared"));
+    }
+
     // ------------------------------------------------------------ fixture
 
     private StripResult dejitter(final String flavour) throws IOException {
