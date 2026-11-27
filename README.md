@@ -17,6 +17,7 @@ The design decisions behind the bytecode stripping and their rationale are recor
 - [_jitter_ Source Code Markup](#jitter-source-code-markup)
   - [_@OnlyIf_](#onlyif)
   - [_Gate.onlyIf_](#gateonlyif)
+  - [_Gate.getOnlyIf_](#gategetonlyif)
   - [_@Fork_](#fork)
   - [_@Alter_](#alter)
 - [_jitter_ Resource Handling](#jitter-resource-handling)
@@ -317,6 +318,30 @@ fun gatedText(): String {
 ```
 
 In the 150% model the block executes normally. When a flavour is stripped whose name is not in the given list, the whole gated call - including the compiled lambda body - is removed from the bytecode, as if the statement had never been written; this works for Java and Kotlin alike, because both compile the lambda to a synthetic method plus a call site. In the dejittered source variant of the active flavour, an active gate is unwrapped to its block body and an inactive gate is removed, so no `Gate.onlyIf` call survives in the dejittered sources.
+
+### _Gate.getOnlyIf_
+
+A Java lambda cannot assign to a captured local variable, so `Gate.onlyIf` blocks cannot hand a result back into a local - the workarounds are fields or holders like `AtomicReference`. For the common case "the gated block produces the value of a local" _jitter_ offers the value-returning gate `Gate.getOnlyIf(flavours, block, orElse)`, where the `orElse` branch supplies the value in every non-listed flavour:
+
+```Java
+public String gatedText() {
+    var text = Gate.getOnlyIf(List.of(Flavour.CUSTOMER_A), () -> "A", () -> "BC");
+    return text;
+}
+
+public Policy gatedPolicy() {
+    var policy = Gate.getOnlyIf(List.of(Flavour.CUSTOMER_A), PolicyA::new, PolicyBC::new);
+    return policy;
+}
+```
+
+```Kotlin
+fun gatedText(): String {
+    return Gate.getOnlyIf(listOf(Flavour.CUSTOMER_A), Supplier { "A" }) { "BC" }
+}
+```
+
+In the 150% model the method returns `block.get()` and never invokes `orElse`. When a flavour is stripped, exactly one branch survives: the `block` branch when the flavour is listed (its value is returned), otherwise the `orElse` branch - the discarded branch, including its compiled lambda or constructor-reference body, is removed from the bytecode, as if it had never been written, so references to flavour-stripped classes inside it leave no dangling references. In the dejittered source variant the whole call is replaced by the selected branch's source (`"A"`, `new PolicyA()`), so no `Gate.getOnlyIf` call survives in the dejittered sources. The result type is inferred from both branches, so a common supertype works with `var`. Note the gate guarantees a type, not non-null: a non-null result in every flavour requires a non-null `orElse`. In Kotlin the `block` argument is not the last parameter, so it needs an explicit `Supplier { ... }` while `orElse` can be the trailing lambda.
 
 ### _@Fork_
 

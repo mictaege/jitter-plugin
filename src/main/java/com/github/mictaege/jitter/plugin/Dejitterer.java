@@ -7,6 +7,7 @@ import com.github.javaparser.Range;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.Modifier;
+import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.NodeList;
 import com.github.javaparser.ast.body.BodyDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
@@ -22,6 +23,7 @@ import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.ArrayInitializerExpr;
 import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.MethodReferenceExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.LambdaExpr;
@@ -34,6 +36,7 @@ import com.github.javaparser.ast.nodeTypes.NodeWithAnnotations;
 import com.github.javaparser.ast.nodeTypes.NodeWithJavadoc;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
+import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.stmt.Statement;
 
 import java.io.File;
@@ -415,6 +418,7 @@ public final class Dejitterer implements AutoCloseable {
                     ctx.removeElement(field);
                 } else {
                     applyAlterConstValues(cu, field, ctx);
+                    applyValueGates(cu, field, ctx);
                     cleanJitterAnnotations(field, ctx);
                 }
             } else if (member instanceof MethodDeclaration) {
@@ -427,6 +431,7 @@ public final class Dejitterer implements AutoCloseable {
                 } else {
                     cleanJitterAnnotations(method, ctx);
                     applyGateBlocks(cu, method, ctx);
+                    applyValueGates(cu, method, ctx);
                 }
             } else if (member instanceof ConstructorDeclaration) {
                 final ConstructorDeclaration constructor = (ConstructorDeclaration) member;
@@ -434,6 +439,7 @@ public final class Dejitterer implements AutoCloseable {
                     ctx.removeElement(constructor);
                 } else {
                     cleanJitterAnnotations(constructor, ctx);
+                    applyValueGates(cu, constructor, ctx);
                 }
             } else if (member instanceof TypeDeclaration) {
                 final TypeDeclaration<?> nested = (TypeDeclaration<?>) member;
@@ -490,6 +496,109 @@ public final class Dejitterer implements AutoCloseable {
                 result.info("Unwrap gate block in " + method.getDeclarationAsString(false, false, false));
             }
         }
+    }
+
+    /**
+     * Applies the {@code Gate.getOnlyIf(...)} value gates of a scope to the dejittered
+     * source: the whole call expression is replaced by the selected branch's source - the
+     * block branch when the active flavour is listed, the orElse branch otherwise - so no
+     * {@code getOnlyIf} call survives in the dejittered source.
+     */
+    private void applyValueGates(final CompilationUnit cu, final Node scope, final FileCtx ctx) {
+        if (activeFlavour.isEmpty()) {
+            return;
+        }
+        for (final MethodCallExpr call : scope.findAll(MethodCallExpr.class)) {
+            if (!isValueGateCall(call) || hasValueGateAncestor(call)) {
+                continue;
+            }
+            final List<String> flavours = gateFlavours(cu, call);
+            if (flavours == null || call.getArguments().size() < 3) {
+                continue;
+            }
+            final boolean listed = flavours.stream().anyMatch(this::active);
+            final Expression branch = call.getArgument(listed ? 1 : 2);
+            final Range range = call.getRange().orElseThrow(IllegalStateException::new);
+            ctx.replace(range, valueGateBranchText(cu, ctx, branch));
+            result.info("Resolve value gate to the " + (listed ? "block" : "orElse") + " branch");
+        }
+    }
+
+    /**
+     * Whether the call is a {@code Gate.getOnlyIf(...)} value-gate call.
+     */
+    private boolean isValueGateCall(final MethodCallExpr call) {
+        if (!"getOnlyIf".equals(call.getNameAsString())) {
+            return false;
+        }
+        final String scope = call.getScope().map(Object::toString).orElse("");
+        return scope.equals("Gate") || scope.endsWith(".Gate");
+    }
+
+    private boolean hasValueGateAncestor(final Node node) {
+        Node parent = node.getParentNode().orElse(null);
+        while (parent != null) {
+            if (parent instanceof MethodCallExpr && isValueGateCall((MethodCallExpr) parent)) {
+                return true;
+            }
+            parent = parent.getParentNode().orElse(null);
+        }
+        return false;
+    }
+
+    /**
+     * The source text a value gate resolves to: the selected branch's body - an expression
+     * lambda's expression, a single-return block's expression, a constructor method
+     * reference {@code X::new} as {@code new X()} - with nested value gates expanded
+     * recursively (innermost first, so the text offsets stay valid).
+     */
+    private String valueGateBranchText(final CompilationUnit cu, final FileCtx ctx,
+                                       final Expression branch) {
+        if (branch instanceof MethodReferenceExpr
+                && "new".equals(((MethodReferenceExpr) branch).getIdentifier())) {
+            final Expression refScope = ((MethodReferenceExpr) branch).getScope();
+            return "new " + (refScope == null ? "" : refScope.toString()) + "()";
+        }
+        final Range baseRange;
+        if (branch instanceof LambdaExpr) {
+            final Statement body = ((LambdaExpr) branch).getBody();
+            if (body instanceof ExpressionStmt) {
+                baseRange = ((ExpressionStmt) body).getExpression().getRange()
+                        .orElseThrow(IllegalStateException::new);
+            } else if (body instanceof BlockStmt && ((BlockStmt) body).getStatements().size() == 1
+                    && ((BlockStmt) body).getStatements().get(0) instanceof ReturnStmt) {
+                baseRange = ((ReturnStmt) ((BlockStmt) body).getStatements().get(0)).getExpression()
+                        .orElseThrow(IllegalStateException::new)
+                        .getRange().orElseThrow(IllegalStateException::new);
+            } else {
+                baseRange = body.getRange().orElseThrow(IllegalStateException::new);
+            }
+        } else {
+            baseRange = branch.getRange().orElseThrow(IllegalStateException::new);
+        }
+        String out = ctx.text(baseRange);
+        final int baseStart = offset(ctx.text, baseRange.begin);
+        final List<MethodCallExpr> nested = branch.findAll(MethodCallExpr.class).stream()
+                .filter(this::isValueGateCall)
+                .sorted(Comparator.comparing(
+                        (final MethodCallExpr c) -> c.getRange()
+                                .orElseThrow(IllegalStateException::new).begin,
+                        Comparator.reverseOrder()))
+                .collect(Collectors.toList());
+        for (final MethodCallExpr call : nested) {
+            final List<String> flavours = gateFlavours(cu, call);
+            if (flavours == null || call.getArguments().size() < 3) {
+                continue;
+            }
+            final boolean listed = flavours.stream().anyMatch(this::active);
+            final String replacement = valueGateBranchText(cu, ctx,
+                    call.getArgument(listed ? 1 : 2));
+            final Range r = call.getRange().orElseThrow(IllegalStateException::new);
+            final int start = offset(ctx.text, r.begin) - baseStart;
+            final int end = offset(ctx.text, r.end) + 1 - baseStart;
+            out = out.substring(0, start) + replacement + out.substring(end);
+        }
+        return out;
     }
 
     /**

@@ -599,6 +599,51 @@ public class KotlinDejittererTest {
         assertThat(text, containsString("import com.other.Shared"));
     }
 
+    @Test
+    void valueGateUnwrapsToBlockBranchForListedFlavour() throws Exception {
+        write("com/example/Gated.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.Gate\n"
+                + "import java.util.function.Supplier\n"
+                + "\n"
+                + "class Gated {\n"
+                + "  fun text(): String {\n"
+                + "    return Gate.getOnlyIf(listOf(\"ESA\"), Supplier { \"EU\" }) { \"NONE-EU\" }\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("com/example/Gated.kt");
+        assertThat(text, containsString("return \"EU\""));
+        assertThat(text, not(containsString("getOnlyIf")));
+        assertThat(text, not(containsString("NONE-EU")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
+    void valueGateUnwrapsToOrElseBranchForNonListedFlavour() throws Exception {
+        write("com/example/Gated.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.Gate\n"
+                + "import java.util.function.Supplier\n"
+                + "\n"
+                + "class Gated {\n"
+                + "  fun text(): String {\n"
+                + "    return Gate.getOnlyIf(listOf(\"ESA\"), Supplier { \"EU\" }) { \"NONE-EU\" }\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Nasa");
+
+        final String text = read("com/example/Gated.kt");
+        assertThat(text, containsString("return \"NONE-EU\""));
+        assertThat(text, not(containsString("getOnlyIf")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
     // ------------------------------------------------------------ fixture
 
     private StripResult dejitter(final String flavour) throws IOException {

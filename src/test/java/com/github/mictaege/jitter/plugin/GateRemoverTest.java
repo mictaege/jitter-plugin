@@ -231,6 +231,128 @@ public class GateRemoverTest {
                 dangling.isEmpty(), is(true));
     }
 
+    @Test
+    void listedFlavourKeepsBlockBranchAndStripsOrElse() throws Exception {
+        final Path classes = compile("test/Gated.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Gate;\n"
+                        + "public class Gated {\n"
+                        + "  public String text() {\n"
+                        + "    return Gate.getOnlyIf(java.util.List.of(\"ESA\"), () -> \"EU\", () -> \"NONE-EU\");\n"
+                        + "  }\n"
+                        + "}\n");
+
+        new BytecodeStripper().strip(classes);
+
+        final ClassNode gated = read(classes, "test/Gated");
+        assertThat("block lambda kept", method(gated, "lambda$text$0", null), is(not(nullValue())));
+        assertThat("orElse lambda removed", method(gated, "lambda$text$1", null), is(nullValue()));
+        assertThat("no gate call remains", callsGate(gated, "text"), is(false));
+        assertThat("value comes from Supplier.get", invokesSupplierGet(gated, "text"), is(true));
+        assertThat("returns the block branch value", invoke(classes, "test.Gated", "text"), is("EU"));
+    }
+
+    @Test
+    void nonListedFlavourKeepsOrElseBranchAndStripsBlock() throws Exception {
+        final Path classes = compile("test/Gated.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Gate;\n"
+                        + "public class Gated {\n"
+                        + "  public String text() {\n"
+                        + "    return Gate.getOnlyIf(java.util.List.of(\"NASA\"), () -> \"EU\", () -> \"NONE-EU\");\n"
+                        + "  }\n"
+                        + "}\n");
+
+        new BytecodeStripper().strip(classes);
+
+        final ClassNode gated = read(classes, "test/Gated");
+        assertThat("block lambda removed", method(gated, "lambda$text$0", null), is(nullValue()));
+        assertThat("orElse lambda kept", method(gated, "lambda$text$1", null), is(not(nullValue())));
+        assertThat("no gate call remains", callsGate(gated, "text"), is(false));
+        assertThat("returns the orElse branch value", invoke(classes, "test.Gated", "text"), is("NONE-EU"));
+    }
+
+    @Test
+    void constructorReferenceBranchStrippedWithItsClassAndVerifies() throws Exception {
+        final Path classes = compile(
+                "test/Gated.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Gate;\n"
+                        + "import com.github.mictaege.jitter.api.OnlyIf;\n"
+                        + "public class Gated {\n"
+                        + "  interface Policy { }\n"
+                        + "  @OnlyIf(\"ESA\") static class EsaPolicy implements Policy { }\n"
+                        + "  @OnlyIf(\"NASA\") static class OtherPolicy implements Policy { }\n"
+                        + "  public Policy policy() {\n"
+                        + "    return Gate.getOnlyIf(java.util.List.of(\"ESA\"), EsaPolicy::new, OtherPolicy::new);\n"
+                        + "  }\n"
+                        + "}\n");
+
+        final StripResult result = new BytecodeStripper().strip(classes);
+
+        final ClassNode gated = read(classes, "test/Gated");
+        assertThat("no gate call remains", callsGate(gated, "policy"), is(false));
+        assertThat("no synthetic lambda methods (constructor references)",
+                gated.methods.stream().noneMatch(m -> m.name.contains("lambda$")), is(true));
+        assertThat("orElse policy class stripped",
+                result.getRemovedClasses().contains("test/Gated$OtherPolicy"), is(true));
+        final List<String> dangling = ReferenceVerifier.findDanglingReferences(
+                java.util.Set.of(classes.toFile()), result.getRemovedClasses(),
+                result.getRemovedMembers());
+        assertThat("no dangling references from the stripped branch", dangling.isEmpty(), is(true));
+        final Object policy = invoke(classes, "test.Gated", "policy");
+        assertThat("returns the block branch policy",
+                policy.getClass().getSimpleName(), is("EsaPolicy"));
+    }
+
+    @Test
+    void nestedValueGateInOrElseBranchResolvesPerFlavour() throws Exception {
+        final Path classes = compile("test/Gated.java",
+                "package test;\n"
+                        + "import com.github.mictaege.jitter.api.Gate;\n"
+                        + "public class Gated {\n"
+                        + "  public String text() {\n"
+                        + "    return Gate.getOnlyIf(java.util.List.of(\"ESA\"), () -> \"EU\",\n"
+                        + "        () -> Gate.getOnlyIf(java.util.List.of(\"NASA\"), () -> \"NASA\", () -> \"OTHER\"));\n"
+                        + "  }\n"
+                        + "}\n");
+
+        new BytecodeStripper().strip(classes);
+
+        final ClassNode gated = read(classes, "test/Gated");
+        assertThat("outer orElse lambda removed with the nested gate",
+                method(gated, "lambda$text$1", null), is(nullValue()));
+        assertThat("returns the outer block branch value",
+                invoke(classes, "test.Gated", "text"), is("EU"));
+    }
+
+    private static boolean invokesSupplierGet(final ClassNode node, final String methodName) {
+        final MethodNode method = method(node, methodName, null);
+        if (method == null) {
+            return false;
+        }
+        for (int i = 0; i < method.instructions.size(); i++) {
+            final org.objectweb.asm.tree.AbstractInsnNode insn = method.instructions.get(i);
+            if (insn instanceof org.objectweb.asm.tree.MethodInsnNode
+                    && "java/util/function/Supplier".equals(
+                            ((org.objectweb.asm.tree.MethodInsnNode) insn).owner)
+                    && "get".equals(((org.objectweb.asm.tree.MethodInsnNode) insn).name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Object invoke(final Path classes, final String className,
+                                 final String methodName) throws Exception {
+        try (java.net.URLClassLoader loader = new java.net.URLClassLoader(
+                new java.net.URL[]{classes.toUri().toURL()},
+                GateRemoverTest.class.getClassLoader())) {
+            final Class<?> cls = Class.forName(className, true, loader);
+            return cls.getMethod(methodName).invoke(cls.getDeclaredConstructor().newInstance());
+        }
+    }
+
     private static boolean callsGate(final ClassNode node, final String methodName) {
         final MethodNode method = method(node, methodName, null);
         if (method == null) {

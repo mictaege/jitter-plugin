@@ -34,6 +34,11 @@ final class GateRemover {
     private static final String GATE_OWNER = "com/github/mictaege/jitter/api/Gate";
     private static final String RUNNABLE_DESC =
             "(Ljava/util/List;Ljava/lang/Runnable;)V";
+    private static final String GET_DESC =
+            "(Ljava/util/List;Ljava/util/function/Supplier;Ljava/util/function/Supplier;)"
+                    + "Ljava/lang/Object;";
+    private static final String SUPPLIER_GET =
+            "java/util/function/Supplier.get()Ljava/lang/Object;";
 
     private GateRemover() {
         super();
@@ -44,6 +49,7 @@ final class GateRemover {
         for (final ClassNode node : new ArrayList<>(ctx.nodes.values())) {
             for (final MethodNode method : new ArrayList<>(node.methods)) {
                 removeGatesInMethod(ctx, node, method, gateLocalAnonClasses);
+                removeValueGatesInMethod(ctx, node, method, gateLocalAnonClasses);
             }
         }
         removeOrphanedLambdas(ctx, gateLocalAnonClasses);
@@ -176,6 +182,104 @@ final class GateRemover {
             ctx.dirty.add(node.name);
             ctx.result.info("Remove gate block in " + node.name.replace('/', '.')
                     + "#" + method.name);
+        }
+    }
+
+    /**
+     * Resolves value gates ({@code Gate.getOnlyIf(flavours, block, orElse)}): exactly one
+     * branch survives per flavour. Call-site layout:
+     * [flavour-list args] INVOKESTATIC List.of [block captures] INVOKEDYNAMIC block
+     * [orElse captures] INVOKEDYNAMIC orElse INVOKESTATIC getOnlyIf
+     * The kept branch's {@code invokedynamic} is followed by
+     * {@code INVOKEINTERFACE Supplier.get()} and produces the value; the flavour-list args,
+     * the discarded branch (captures + indy + its synthetic lambda body) and the gate call
+     * itself are removed, as if the discarded branch had never been written.
+     */
+    private static void removeValueGatesInMethod(final StripContext ctx, final ClassNode node,
+                                                 final MethodNode method,
+                                                 final Set<String> gateLocalAnonClasses) {
+        final List<AbstractInsnNode> insns = new ArrayList<>();
+        for (int i = 0; i < method.instructions.size(); i++) {
+            insns.add(method.instructions.get(i));
+        }
+        for (int i = 0; i < insns.size(); i++) {
+            final AbstractInsnNode insn = insns.get(i);
+            if (!(insn instanceof MethodInsnNode)) {
+                continue;
+            }
+            final MethodInsnNode call = (MethodInsnNode) insn;
+            if (!GATE_OWNER.equals(call.owner) || !"getOnlyIf".equals(call.name)
+                    || !GET_DESC.equals(call.desc)) {
+                continue;
+            }
+            final AbstractInsnNode orElseIndy = call.getPrevious();
+            if (!(orElseIndy instanceof InvokeDynamicInsnNode)) {
+                continue;
+            }
+            // scan back past the orElse captures and the block indy to the flavour-list call
+            AbstractInsnNode listOf = null;
+            for (AbstractInsnNode n = orElseIndy.getPrevious(); n != null; n = n.getPrevious()) {
+                if (n instanceof MethodInsnNode) {
+                    final MethodInsnNode m = (MethodInsnNode) n;
+                    if ("of".equals(m.name) && "java/util/List".equals(m.owner)
+                            || "listOf".equals(m.name)
+                                    && m.owner.startsWith("kotlin/collections/")) {
+                        listOf = n;
+                    }
+                    break;
+                }
+            }
+            if (listOf == null) {
+                continue;
+            }
+            final AbstractInsnNode argsStart = findArgsStart(listOf, method.instructions.getFirst());
+            if (argsStart == null) {
+                continue;
+            }
+            final Set<String> flavours = collectStrings(argsStart, listOf);
+            // the block indy is the first invokedynamic of the span
+            AbstractInsnNode blockIndy = null;
+            for (AbstractInsnNode n = argsStart; n != null && n != call; n = n.getNext()) {
+                if (n instanceof InvokeDynamicInsnNode) {
+                    blockIndy = n;
+                    break;
+                }
+            }
+            if (blockIndy == null || blockIndy == orElseIndy) {
+                continue;
+            }
+            final boolean listed = flavours.stream().anyMatch(JitterUtil::active);
+            final AbstractInsnNode kept = listed ? blockIndy : orElseIndy;
+            final InvokeDynamicInsnNode discarded =
+                    (InvokeDynamicInsnNode) (listed ? orElseIndy : blockIndy);
+            // collect the span first: InsnList.remove unlinks the node
+            final List<AbstractInsnNode> span = new ArrayList<>();
+            for (AbstractInsnNode n = argsStart; n != null; n = n.getNext()) {
+                span.add(n);
+                if (n == call) {
+                    break;
+                }
+            }
+            final int listOfIdx = span.indexOf(listOf);
+            final int blockIdx = span.indexOf(blockIndy);
+            final int orElseIdx = span.indexOf(orElseIndy);
+            final List<AbstractInsnNode> toRemove = new ArrayList<>();
+            for (int k = 0; k < span.size(); k++) {
+                final AbstractInsnNode n = span.get(k);
+                final boolean keep = n == kept
+                        || listed && k > listOfIdx && k < blockIdx   // block captures
+                        || !listed && k > blockIdx && k < orElseIdx;  // orElse captures
+                if (!keep) {
+                    toRemove.add(n);
+                }
+            }
+            toRemove.forEach(method.instructions::remove);
+            method.instructions.insert(kept, new MethodInsnNode(Opcodes.INVOKEINTERFACE,
+                    "java/util/function/Supplier", "get", "()Ljava/lang/Object;", true));
+            removeLambdaBody(ctx, node, discarded, gateLocalAnonClasses);
+            ctx.dirty.add(node.name);
+            ctx.result.info("Resolve value gate in " + node.name.replace('/', '.')
+                    + "#" + method.name + " to the " + (listed ? "block" : "orElse") + " branch");
         }
     }
 

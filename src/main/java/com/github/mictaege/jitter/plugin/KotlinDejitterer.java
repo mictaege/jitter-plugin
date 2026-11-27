@@ -15,9 +15,11 @@ import org.jetbrains.kotlin.psi.KtBinaryExpression;
 import org.jetbrains.kotlin.psi.KtBlockExpression;
 import org.jetbrains.kotlin.psi.KtCallElement;
 import org.jetbrains.kotlin.psi.KtCallExpression;
+import org.jetbrains.kotlin.psi.KtCallableReferenceExpression;
 import org.jetbrains.kotlin.psi.KtClassOrObject;
 import org.jetbrains.kotlin.psi.KtCollectionLiteralExpression;
 import org.jetbrains.kotlin.psi.KtDeclaration;
+import org.jetbrains.kotlin.psi.KtElement;
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression;
 import org.jetbrains.kotlin.psi.KtEnumEntry;
 import org.jetbrains.kotlin.psi.KtExpression;
@@ -33,6 +35,7 @@ import org.jetbrains.kotlin.psi.KtParameterList;
 import org.jetbrains.kotlin.psi.KtProperty;
 import org.jetbrains.kotlin.psi.KtPsiFactory;
 import org.jetbrains.kotlin.psi.KtStringTemplateExpression;
+import org.jetbrains.kotlin.psi.KtTreeVisitorVoid;
 import org.jetbrains.kotlin.psi.KtValueArgument;
 import org.jetbrains.kotlin.psi.KtValueArgumentName;
 
@@ -43,6 +46,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -208,6 +212,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
             ctx.result.info("Remove file " + file.getFileName());
             return null;
         }
+        applyValueGates(ctx, ktFile);
         final String out = pruneImports(ctx.edits.apply(), ctx.imports, result);
         for (final KtDeclaration decl : declarations) {
             if (ctx.removed.contains(decl)) {
@@ -539,6 +544,173 @@ public final class KotlinDejitterer implements KotlinDejitter {
                         annotation.getTextRange().getEndOffset());
             }
         }
+    }
+
+    /**
+     * Applies the {@code Gate.getOnlyIf(...)} value gates of a file to the dejittered
+     * source: the whole call expression is replaced by the selected branch's source - the
+     * block branch when the active flavour is listed, the orElse branch otherwise - so no
+     * {@code getOnlyIf} call survives in the dejittered source. Nested gates inside a
+     * branch are expanded recursively into the replacement text (only the outermost call
+     * gets an edit, so spans never overlap).
+     */
+    private void applyValueGates(final FileCtx ctx, final KtFile file) {
+        if (activeFlavour.isEmpty()) {
+            return;
+        }
+        for (final KtCallExpression call : findCallExpressions(file)) {
+            if (!isValueGateCall(call) || hasValueGateAncestor(call)) {
+                continue;
+            }
+            final List<String> flavours = gateFlavours(ctx, call);
+            if (flavours == null) {
+                continue;
+            }
+            final boolean listed = flavours.stream().anyMatch(this::active);
+            final KtExpression branch = valueGateBranch(call, listed);
+            if (branch == null) {
+                continue;
+            }
+            final KtExpression target = qualifiedTarget(call);
+            ctx.edits.replace(target.getTextRange().getStartOffset(),
+                    target.getTextRange().getEndOffset(), valueGateBranchText(ctx, branch));
+            ctx.result.info("Resolve value gate to the " + (listed ? "block" : "orElse")
+                    + " branch");
+        }
+    }
+
+    /**
+     * All call expressions below the given PSI element, in tree order.
+     */
+    private static List<KtCallExpression> findCallExpressions(final KtElement root) {
+        final List<KtCallExpression> out = new ArrayList<>();
+        root.accept(new KtTreeVisitorVoid() {
+            @Override
+            public void visitCallExpression(final KtCallExpression callExpression) {
+                out.add(callExpression);
+                super.visitCallExpression(callExpression);
+            }
+        });
+        return out;
+    }
+
+    /**
+     * The expression whose text a value-gate call resolves to: the whole
+     * {@code Gate.getOnlyIf(...)} dot-qualified expression, not just the call
+     * selector (whose range excludes the {@code Gate.} receiver).
+     */
+    private static KtExpression qualifiedTarget(final KtCallExpression call) {
+        if (call.getParent() instanceof KtDotQualifiedExpression
+                && ((KtDotQualifiedExpression) call.getParent()).getSelectorExpression() == call) {
+            return (KtDotQualifiedExpression) call.getParent();
+        }
+        return call;
+    }
+
+    /**
+     * Whether the call is a {@code Gate.getOnlyIf(...)} value-gate call.
+     */
+    private boolean isValueGateCall(final KtCallExpression call) {
+        if (!"getOnlyIf".equals(call.getCalleeExpression().getText())) {
+            return false;
+        }
+        final KtExpression parent = call.getParent() instanceof KtDotQualifiedExpression
+                ? ((KtDotQualifiedExpression) call.getParent()).getReceiverExpression() : null;
+        return parent != null && parent.getText().endsWith("Gate");
+    }
+
+    private boolean hasValueGateAncestor(final KtExpression expr) {
+        var parent = expr.getParent();
+        while (parent != null) {
+            if (parent instanceof KtCallExpression && isValueGateCall((KtCallExpression) parent)) {
+                return true;
+            }
+            parent = parent.getParent();
+        }
+        return false;
+    }
+
+    /**
+     * The selected branch expression of a value-gate call: the block argument (second
+     * value argument) when listed, else the orElse (trailing lambda or third value
+     * argument), with a {@code Supplier { ... }} SAM constructor unwrapped to its lambda.
+     */
+    private KtExpression valueGateBranch(final KtCallExpression call, final boolean listed) {
+        final List<KtValueArgument> args = call.getValueArguments();
+        KtExpression branch = null;
+        if (listed) {
+            if (args.size() >= 2) {
+                branch = args.get(1).getArgumentExpression();
+            }
+        } else if (!call.getLambdaArguments().isEmpty()) {
+            branch = call.getLambdaArguments().get(0).getArgumentExpression();
+        } else if (args.size() >= 3) {
+            branch = args.get(2).getArgumentExpression();
+        }
+        if (branch instanceof KtCallExpression
+                && "Supplier".equals(((KtCallExpression) branch).getCalleeExpression().getText())) {
+            final KtCallExpression sam = (KtCallExpression) branch;
+            if (!sam.getLambdaArguments().isEmpty()) {
+                return sam.getLambdaArguments().get(0).getArgumentExpression();
+            }
+            if (!sam.getValueArguments().isEmpty()) {
+                return sam.getValueArguments().get(0).getArgumentExpression();
+            }
+        }
+        return branch;
+    }
+
+    /**
+     * The source text a value gate resolves to: the selected branch's lambda body (a
+     * single-statement block's expression), a callable constructor reference
+     * {@code ::EsaPolicy} as {@code EsaPolicy()}, or the branch expression's text - with
+     * nested value gates expanded recursively (last first, so text offsets stay valid).
+     */
+    private String valueGateBranchText(final FileCtx ctx, final KtExpression branch) {
+        if (branch instanceof KtCallableReferenceExpression && branch.getText().startsWith("::")) {
+            return branch.getText().substring(2) + "()";
+        }
+        final int baseStart;
+        final String baseText;
+        if (branch instanceof KtLambdaExpression
+                && ((KtLambdaExpression) branch).getBodyExpression() instanceof KtBlockExpression) {
+            final KtBlockExpression body =
+                    (KtBlockExpression) ((KtLambdaExpression) branch).getBodyExpression();
+            if (body.getStatements().size() == 1) {
+                baseStart = body.getStatements().get(0).getTextRange().getStartOffset();
+                baseText = body.getStatements().get(0).getText();
+            } else {
+                baseStart = body.getTextRange().getStartOffset();
+                baseText = body.getStatements().stream()
+                        .map(KtExpression::getText).collect(Collectors.joining("\n"));
+            }
+        } else {
+            baseStart = branch.getTextRange().getStartOffset();
+            baseText = branch.getText();
+        }
+        String out = baseText;
+        final List<KtCallExpression> nested = findCallExpressions(branch).stream()
+                .filter(this::isValueGateCall)
+                .sorted(Comparator.comparingInt(
+                        (final KtCallExpression c) -> c.getTextRange().getStartOffset()).reversed())
+                .collect(Collectors.toList());
+        for (final KtCallExpression call : nested) {
+            final List<String> flavours = gateFlavours(ctx, call);
+            if (flavours == null) {
+                continue;
+            }
+            final boolean listed = flavours.stream().anyMatch(this::active);
+            final KtExpression inner = valueGateBranch(call, listed);
+            if (inner == null) {
+                continue;
+            }
+            final String replacement = valueGateBranchText(ctx, inner);
+            final KtExpression target = qualifiedTarget(call);
+            final int start = target.getTextRange().getStartOffset() - baseStart;
+            final int end = target.getTextRange().getEndOffset() - baseStart;
+            out = out.substring(0, start) + replacement + out.substring(end);
+        }
+        return out;
     }
 
     /**

@@ -614,6 +614,86 @@ public class DejittererTest {
         assertThat(result.getErrors().isEmpty(), is(true));
     }
 
+    @Test
+    void valueGateUnwrapsToBlockBranchForListedFlavour() throws Exception {
+        write("com/example/Gated.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.Gate;\n"
+                + "public class Gated {\n"
+                + "  public String text() {\n"
+                + "    return Gate.getOnlyIf(java.util.List.of(\"ESA\"), () -> \"EU\", () -> \"NONE-EU\");\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("com/example/Gated.java");
+        assertThat(text, containsString("return \"EU\";"));
+        assertThat(text, not(containsString("getOnlyIf")));
+        assertThat(text, not(containsString("NONE-EU")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
+    void valueGateUnwrapsToOrElseBranchForNonListedFlavour() throws Exception {
+        write("com/example/Gated.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.Gate;\n"
+                + "public class Gated {\n"
+                + "  public String text() {\n"
+                + "    return Gate.getOnlyIf(java.util.List.of(\"ESA\"), () -> \"EU\", () -> \"NONE-EU\");\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Nasa");
+
+        final String text = read("com/example/Gated.java");
+        assertThat(text, containsString("return \"NONE-EU\";"));
+        assertThat(text, not(containsString("getOnlyIf")));
+        assertThat(text, not(containsString("\"EU\"")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
+    void valueGateConstructorReferenceUnwrapsToNew() throws Exception {
+        write("com/example/Gated.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.Gate;\n"
+                + "public class Gated {\n"
+                + "  interface Policy { }\n"
+                + "  static class EsaPolicy implements Policy { }\n"
+                + "  static class OtherPolicy implements Policy { }\n"
+                + "  public Policy policy() {\n"
+                + "    return Gate.getOnlyIf(java.util.List.of(\"ESA\"), EsaPolicy::new, OtherPolicy::new);\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("com/example/Gated.java");
+        assertThat(text, containsString("return new EsaPolicy();"));
+        assertThat(text, not(containsString("getOnlyIf")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
+    void valueGateStaysUntouchedInThe150PercentModel() throws Exception {
+        write("com/example/Gated.java",
+                "package com.example;\n"
+                + "import com.github.mictaege.jitter.api.Gate;\n"
+                + "public class Gated {\n"
+                + "  public String text() {\n"
+                + "    return Gate.getOnlyIf(java.util.List.of(\"ESA\"), () -> \"EU\", () -> \"NONE-EU\");\n"
+                + "  }\n"
+                + "}\n");
+
+        dejitter("");
+
+        final String text = read("com/example/Gated.java");
+        assertThat(text, containsString("Gate.getOnlyIf"));
+        assertThat(text, containsString("\"NONE-EU\""));
+    }
+
     // ------------------------------------------------------------ fixture
 
     private StripResult dejitter(final String flavour) throws IOException {
