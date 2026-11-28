@@ -677,6 +677,46 @@ public class DejittererTest {
     }
 
     @Test
+    void valueGateViaStaticImportUnwrapsForListedFlavour() throws Exception {
+        write("com/example/Gated.java",
+                "package com.example;\n"
+                + "import static com.github.mictaege.jitter.api.Gate.getOnlyIf;\n"
+                + "public class Gated {\n"
+                + "  public String text() {\n"
+                + "    return getOnlyIf(java.util.List.of(\"ESA\"), () -> \"EU\", () -> \"NONE-EU\");\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("com/example/Gated.java");
+        assertThat(text, containsString("return \"EU\";"));
+        assertThat(text, not(containsString("getOnlyIf(")));
+        assertThat(text, not(containsString("NONE-EU")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
+    void blockGateViaStaticImportIsRemovedForNonListedFlavour() throws Exception {
+        write("com/example/Gated.java",
+                "package com.example;\n"
+                + "import static com.github.mictaege.jitter.api.Gate.onlyIf;\n"
+                + "public class Gated {\n"
+                + "  public void run() {\n"
+                + "    onlyIf(java.util.List.of(\"ESA\"), () -> System.out.println(\"EU\"));\n"
+                + "    System.out.println(\"ALL\");\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Nasa");
+
+        final String text = read("com/example/Gated.java");
+        assertThat(text, not(containsString("onlyIf(")));
+        assertThat(text, containsString("\"ALL\""));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
     void valueGateStaysUntouchedInThe150PercentModel() throws Exception {
         write("com/example/Gated.java",
                 "package com.example;\n"

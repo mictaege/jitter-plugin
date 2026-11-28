@@ -559,7 +559,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
             return;
         }
         for (final KtCallExpression call : findCallExpressions(file)) {
-            if (!isValueGateCall(call) || hasValueGateAncestor(call)) {
+            if (!isValueGateCall(ctx, call) || hasValueGateAncestor(ctx, call)) {
                 continue;
             }
             final List<String> flavours = gateFlavours(ctx, call);
@@ -608,24 +608,45 @@ public final class KotlinDejitterer implements KotlinDejitter {
     }
 
     /**
-     * Whether the call is a {@code Gate.getOnlyIf(...)} value-gate call.
+     * Whether the call is a {@code Gate.getOnlyIf(...)} value-gate call: either
+     * dot-qualified on a {@code Gate} receiver or - via a static import of
+     * {@code Gate.getOnlyIf} - called unqualified.
      */
-    private boolean isValueGateCall(final KtCallExpression call) {
+    private boolean isValueGateCall(final FileCtx ctx, final KtCallExpression call) {
         if (!"getOnlyIf".equals(call.getCalleeExpression().getText())) {
             return false;
         }
         final KtExpression parent = call.getParent() instanceof KtDotQualifiedExpression
                 ? ((KtDotQualifiedExpression) call.getParent()).getReceiverExpression() : null;
-        return parent != null && parent.getText().endsWith("Gate");
+        if (parent != null) {
+            return parent.getText().endsWith("Gate");
+        }
+        return isStaticGateImport(ctx, "getOnlyIf");
     }
 
-    private boolean hasValueGateAncestor(final KtExpression expr) {
+    private boolean hasValueGateAncestor(final FileCtx ctx, final KtExpression expr) {
         var parent = expr.getParent();
         while (parent != null) {
-            if (parent instanceof KtCallExpression && isValueGateCall((KtCallExpression) parent)) {
+            if (parent instanceof KtCallExpression && isValueGateCall(ctx, (KtCallExpression) parent)) {
                 return true;
             }
             parent = parent.getParent();
+        }
+        return false;
+    }
+
+    /**
+     * Whether the file statically imports the given member of
+     * {@code com.github.mictaege.jitter.api.Gate} (e.g.
+     * {@code import com.github.mictaege.jitter.api.Gate.getOnlyIf}), so an
+     * unqualified call of that name is a gate call.
+     */
+    private boolean isStaticGateImport(final FileCtx ctx, final String name) {
+        final String imported = JITTER_API_IMPORT + "Gate." + name;
+        for (final String imp : ctx.imports) {
+            if (imp.equals(imported)) {
+                return true;
+            }
         }
         return false;
     }
@@ -690,7 +711,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
         }
         String out = baseText;
         final List<KtCallExpression> nested = findCallExpressions(branch).stream()
-                .filter(this::isValueGateCall)
+                .filter(c -> isValueGateCall(ctx, c))
                 .sorted(Comparator.comparingInt(
                         (final KtCallExpression c) -> c.getTextRange().getStartOffset()).reversed())
                 .collect(Collectors.toList());
@@ -726,7 +747,7 @@ public final class KotlinDejitterer implements KotlinDejitter {
             return;
         }
         for (final KtExpression st : ((KtBlockExpression) fn.getBodyExpression()).getStatements()) {
-            final KtCallExpression call = gateCall(st);
+            final KtCallExpression call = gateCall(ctx, st);
             if (call == null) {
                 continue;
             }
@@ -763,12 +784,16 @@ public final class KotlinDejitterer implements KotlinDejitter {
 
     /**
      * The {@code Gate.onlyIf(...)} call of a statement, or null when the
-     * statement is no gate call.
+     * statement is no gate call: either dot-qualified on a {@code Gate}
+     * receiver or - via a static import of {@code Gate.onlyIf} - called
+     * unqualified.
      */
-    private KtCallExpression gateCall(final KtExpression st) {
+    private KtCallExpression gateCall(final FileCtx ctx, final KtExpression st) {
         KtCallExpression call = null;
         KtExpression receiver = null;
-        if (st instanceof KtDotQualifiedExpression) {
+        if (st instanceof KtCallExpression) {
+            call = (KtCallExpression) st;
+        } else if (st instanceof KtDotQualifiedExpression) {
             final KtDotQualifiedExpression dqe = (KtDotQualifiedExpression) st;
             if (dqe.getSelectorExpression() instanceof KtCallExpression) {
                 call = (KtCallExpression) dqe.getSelectorExpression();
@@ -787,10 +812,10 @@ public final class KotlinDejitterer implements KotlinDejitter {
         if (call == null || !"onlyIf".equals(call.getCalleeExpression().getText())) {
             return null;
         }
-        if (receiver == null || !receiver.getText().endsWith("Gate")) {
-            return null;
+        if (receiver != null) {
+            return receiver.getText().endsWith("Gate") ? call : null;
         }
-        return call;
+        return isStaticGateImport(ctx, "onlyIf") ? call : null;
     }
 
     /**

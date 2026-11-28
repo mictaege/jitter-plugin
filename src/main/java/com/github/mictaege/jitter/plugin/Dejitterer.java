@@ -473,7 +473,7 @@ public final class Dejitterer implements AutoCloseable {
             return;
         }
         for (final Statement st : new ArrayList<>(method.getBody().get().getStatements())) {
-            final MethodCallExpr call = gateCall(st);
+            final MethodCallExpr call = gateCall(cu, st);
             if (call == null) {
                 continue;
             }
@@ -509,7 +509,7 @@ public final class Dejitterer implements AutoCloseable {
             return;
         }
         for (final MethodCallExpr call : scope.findAll(MethodCallExpr.class)) {
-            if (!isValueGateCall(call) || hasValueGateAncestor(call)) {
+            if (!isValueGateCall(cu, call) || hasValueGateAncestor(cu, call)) {
                 continue;
             }
             final List<String> flavours = gateFlavours(cu, call);
@@ -525,23 +525,44 @@ public final class Dejitterer implements AutoCloseable {
     }
 
     /**
-     * Whether the call is a {@code Gate.getOnlyIf(...)} value-gate call.
+     * Whether the call is a {@code Gate.getOnlyIf(...)} value-gate call: either
+     * scoped on a {@code Gate} receiver or - via a static import of
+     * {@code Gate.getOnlyIf} - called unqualified.
      */
-    private boolean isValueGateCall(final MethodCallExpr call) {
+    private boolean isValueGateCall(final CompilationUnit cu, final MethodCallExpr call) {
         if (!"getOnlyIf".equals(call.getNameAsString())) {
             return false;
         }
         final String scope = call.getScope().map(Object::toString).orElse("");
-        return scope.equals("Gate") || scope.endsWith(".Gate");
+        if (!scope.isEmpty()) {
+            return scope.equals("Gate") || scope.endsWith(".Gate");
+        }
+        return isStaticGateImport(cu, "getOnlyIf");
     }
 
-    private boolean hasValueGateAncestor(final Node node) {
+    private boolean hasValueGateAncestor(final CompilationUnit cu, final Node node) {
         Node parent = node.getParentNode().orElse(null);
         while (parent != null) {
-            if (parent instanceof MethodCallExpr && isValueGateCall((MethodCallExpr) parent)) {
+            if (parent instanceof MethodCallExpr && isValueGateCall(cu, (MethodCallExpr) parent)) {
                 return true;
             }
             parent = parent.getParentNode().orElse(null);
+        }
+        return false;
+    }
+
+    /**
+     * Whether the compilation unit statically imports the given member of
+     * {@code com.github.mictaege.jitter.api.Gate} (e.g.
+     * {@code import static com.github.mictaege.jitter.api.Gate.getOnlyIf;}), so
+     * an unqualified call of that name is a gate call.
+     */
+    private boolean isStaticGateImport(final CompilationUnit cu, final String name) {
+        final String imported = "com.github.mictaege.jitter.api.Gate." + name;
+        for (final ImportDeclaration imp : cu.getImports()) {
+            if (imp.isStatic() && imp.getNameAsString().equals(imported)) {
+                return true;
+            }
         }
         return false;
     }
@@ -579,7 +600,7 @@ public final class Dejitterer implements AutoCloseable {
         String out = ctx.text(baseRange);
         final int baseStart = offset(ctx.text, baseRange.begin);
         final List<MethodCallExpr> nested = branch.findAll(MethodCallExpr.class).stream()
-                .filter(this::isValueGateCall)
+                .filter(c -> isValueGateCall(cu, c))
                 .sorted(Comparator.comparing(
                         (final MethodCallExpr c) -> c.getRange()
                                 .orElseThrow(IllegalStateException::new).begin,
@@ -603,9 +624,10 @@ public final class Dejitterer implements AutoCloseable {
 
     /**
      * The {@code Gate.onlyIf(...)} call of a statement, or null when the
-     * statement is no gate call.
+     * statement is no gate call: either scoped on a {@code Gate} receiver or -
+     * via a static import of {@code Gate.onlyIf} - called unqualified.
      */
-    private MethodCallExpr gateCall(final Statement st) {
+    private MethodCallExpr gateCall(final CompilationUnit cu, final Statement st) {
         if (!(st instanceof ExpressionStmt)) {
             return null;
         }
@@ -621,10 +643,10 @@ public final class Dejitterer implements AutoCloseable {
             return null;
         }
         final String scope = call.getScope().map(Object::toString).orElse("");
-        if (!scope.equals("Gate") && !scope.endsWith(".Gate")) {
-            return null;
+        if (!scope.isEmpty()) {
+            return scope.equals("Gate") || scope.endsWith(".Gate") ? call : null;
         }
-        return call;
+        return isStaticGateImport(cu, "onlyIf") ? call : null;
     }
 
     /**

@@ -644,6 +644,51 @@ public class KotlinDejittererTest {
         assertThat(result.getErrors().isEmpty(), is(true));
     }
 
+    @Test
+    void valueGateViaStaticImportUnwrapsForListedFlavour() throws Exception {
+        write("com/example/Gated.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.Gate.getOnlyIf\n"
+                + "import java.util.function.Supplier\n"
+                + "\n"
+                + "class Gated {\n"
+                + "  fun text(): String {\n"
+                + "    return getOnlyIf(listOf(\"ESA\"), Supplier { \"EU\" }) { \"NONE-EU\" }\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Esa");
+
+        final String text = read("com/example/Gated.kt");
+        assertThat(text, containsString("return \"EU\""));
+        assertThat(text, not(containsString("getOnlyIf(")));
+        assertThat(text, not(containsString("NONE-EU")));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
+    @Test
+    void blockGateViaStaticImportIsRemovedForNonListedFlavour() throws Exception {
+        write("com/example/Gated.kt",
+                "package com.example\n"
+                + "\n"
+                + "import com.github.mictaege.jitter.api.Gate.onlyIf\n"
+                + "\n"
+                + "class Gated {\n"
+                + "  fun run() {\n"
+                + "    onlyIf(listOf(\"ESA\")) { println(\"EU\") }\n"
+                + "    println(\"ALL\")\n"
+                + "  }\n"
+                + "}\n");
+
+        final StripResult result = dejitter("Nasa");
+
+        final String text = read("com/example/Gated.kt");
+        assertThat(text, not(containsString("onlyIf(")));
+        assertThat(text, containsString("\"ALL\""));
+        assertThat(result.getErrors().isEmpty(), is(true));
+    }
+
     // ------------------------------------------------------------ fixture
 
     private StripResult dejitter(final String flavour) throws IOException {
